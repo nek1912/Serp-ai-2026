@@ -2746,7 +2746,7 @@ Verify with `Select-String` that no Next.js reference survives, and that all 15
 routes are present. Run from `frontend-react/`:
 
 ```powershell
-"next/ refs:      " + (Select-String -Path "src\**\*.tsx","src\**\*.ts","server\**\*.js" -Pattern "next/link|next/navigation|next/server|next/font|NextResponse" -ErrorAction SilentlyContinue | Measure-Object).Count
+"next/ refs:      " + (Select-String -Path "src\**\*.tsx","src\**\*.ts","server\**\*.js" -Pattern "next/link|next/navigation|next/server|next/font|NextResponse|@clerk/nextjs|style jsx" -ErrorAction SilentlyContinue | Measure-Object).Count
 "routes declared: " + (Select-String -LiteralPath "src\App.tsx" -Pattern "<Route path=" | Measure-Object).Count
 "api endpoints:   " + (Select-String -LiteralPath "server\index.js" -Pattern 'app\.(get|post)\("/api' | Measure-Object).Count
 "pages:           " + (Get-ChildItem -LiteralPath "src\pages" -Filter *.tsx | Measure-Object).Count
