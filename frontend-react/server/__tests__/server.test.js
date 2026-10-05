@@ -112,6 +112,17 @@ describe("grievance handlers", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).error).toBe("grievance_backend_unavailable");
   });
+
+  // Next read `await res.json()` inside its try, so a 200 carrying an
+  // unparseable body produced the 503 rather than escaping as a 500.
+  it("returns 503 when a 200 response has an unparseable body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 200 }),
+    );
+    const res = await json("/api/grievance/answer", { conversation_id: "c1" });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("grievance_backend_unavailable");
+  });
 });
 
 describe("GET /api/grievance/fields", () => {
@@ -144,6 +155,15 @@ describe("GET /api/grievance/fields", () => {
       .mockResolvedValue(new Response(JSON.stringify({ fields: [] }), { status: 200 }));
     await realFetch(`${base}/api/grievance/fields?conversation_id=abc`);
     expect(spy.mock.calls[0][0]).toContain("language=en");
+  });
+
+  it("returns 503 when a 200 response has an unparseable body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 200 }),
+    );
+    const res = await realFetch(`${base}/api/grievance/fields?conversation_id=abc`);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("grievance_backend_unavailable");
   });
 });
 
@@ -182,6 +202,17 @@ describe("POST /api/translate", () => {
     await json("/api/translate", { texts: ["hello"], to: "ta" });
     const [, init] = spy.mock.calls[0];
     expect(JSON.parse(init.body).target_language).toBe("hi");
+  });
+
+  // Next read `await res.json()` inside its try, so an unparseable 200 landed
+  // in the catch and degraded to the source-text fallback.
+  it("falls back to the source texts when a 200 response has an unparseable body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 200 }),
+    );
+    const res = await json("/api/translate", { texts: ["hello"] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ translations: ["hello"] });
   });
 });
 
@@ -280,6 +311,20 @@ describe("GET /api/documents/pdf/:filename", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).error).toBe("Document service unavailable");
   });
+
+  it("returns 503 when the body stream errors mid-read", async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.error(new Error("truncated"));
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, { status: 200, headers: { "Content-Type": "application/pdf" } }),
+    );
+    const res = await realFetch(`${base}/api/documents/pdf/x.pdf`);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("Document service unavailable");
+  });
 });
 
 describe("POST /api/speak", () => {
@@ -344,6 +389,42 @@ describe("POST /api/speak", () => {
     expect(res.headers.get("content-type")).toBe("audio/mpeg");
     expect((await res.arrayBuffer()).byteLength).toBe(0);
   });
+
+  // The empty audio/mpeg 503 is the signal the browser speechSynthesis
+  // fallback keys on, so an unparseable 200 must reach it, not a 500.
+  it("returns the empty audio/mpeg 503 when a 200 response has an unparseable body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 200 }),
+    );
+    const res = await realFetch(`${base}/api/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data; boundary=----b" },
+      body: multipart({ text: "hello" }),
+    });
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toBe("audio/mpeg");
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  // The whole point of hexToBuffer is the MP3 payload. "00ff10ab" is chosen so
+  // a wrong conversion is detectable: an empty buffer drops the bytes, and
+  // treating the hex as ASCII/UTF-16 yields 0x30/0x30/0x66/0x66 instead.
+  it("decodes the backend's hex audio into the exact bytes", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ audio: "00ff10ab" }), { status: 200 }),
+    );
+
+    const res = await realFetch(`${base}/api/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data; boundary=----b" },
+      body: multipart({ text: "hello" }),
+    });
+
+    expect(res.status).toBe(200);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(bytes).toEqual(Buffer.from([0x00, 0xff, 0x10, 0xab]));
+    expect([...bytes]).toEqual([0x00, 0xff, 0x10, 0xab]);
+  });
 });
 
 describe("POST /api/voice/speak", () => {
@@ -376,6 +457,17 @@ describe("POST /api/voice/speak", () => {
 
   it("returns 503 when the backend is down", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("down"));
+    const res = await json("/api/voice/speak", {
+      segments: [{ text: "hi", language: "hi" }],
+    });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("Backend unavailable");
+  });
+
+  it("returns 503 when a 200 response has an unparseable body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>gateway</html>", { status: 200 }),
+    );
     const res = await json("/api/voice/speak", {
       segments: [{ text: "hi", language: "hi" }],
     });

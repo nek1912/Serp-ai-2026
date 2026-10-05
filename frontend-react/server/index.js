@@ -11,6 +11,9 @@ import {
   proxyJson,
   readJson,
   hexToBuffer,
+  readUpstreamJson,
+  readUpstreamBuffer,
+  BODY_UNREADABLE,
 } from "./proxy.js";
 import { proxySse } from "./sse.js";
 
@@ -81,8 +84,21 @@ export function createApp() {
     const length = upstream.headers.get("content-length");
     if (length) headers["Content-Length"] = length;
 
+    // Buffered before writeHead: once the 200 headers are flushed a mid-stream
+    // read failure can only produce a truncated response, so the failure has to
+    // be caught while the status is still writable. Next streamed res.body
+    // straight through, but buffering is what the port requires, and the only
+    // documented failure for this endpoint is the 503 below.
+    const body = await readUpstreamBuffer(upstream);
+    if (body === BODY_UNREADABLE) {
+      return res.status(503).json({
+        error: "Document service unavailable",
+        detail: "backend unreachable",
+      });
+    }
+
     res.writeHead(200, headers);
-    res.end(Buffer.from(await upstream.arrayBuffer()));
+    res.end(body);
   });
 
   // ── Grievance JSON handlers ───────────────────────────────────────────
@@ -118,7 +134,16 @@ export function createApp() {
         detail: "backend unreachable",
       });
     }
-    if (upstream.ok) return res.json(await upstream.json());
+    if (upstream.ok) {
+      const data = await readUpstreamJson(upstream);
+      if (data !== BODY_UNREADABLE) return res.json(data);
+      // Unparseable 200 must land on the same 503 as an unreachable backend,
+      // not on the non-ok 502 mapping below (upstream.status is 200 there).
+      return res.status(503).json({
+        error: "grievance_backend_unavailable",
+        detail: "backend unreachable",
+      });
+    }
 
     return res.status(upstream.status === 404 ? 404 : 502).json({
       error: "grievance_backend_error",
@@ -153,8 +178,11 @@ export function createApp() {
     );
 
     if (upstream && upstream.ok) {
-      const data = await upstream.json();
-      if (data.audio) {
+      // An unparseable 200 must fall through to the empty 503 below rather than
+      // escaping as a 500, matching Next where `await res.json()` was inside
+      // the try and the catch fell through to the speechSynthesis fallback.
+      const data = await readUpstreamJson(upstream);
+      if (data !== BODY_UNREADABLE && data.audio) {
         return res
           .status(200)
           .set("Content-Type", "audio/mpeg")
@@ -191,8 +219,10 @@ export function createApp() {
     );
 
     if (upstream && upstream.ok) {
-      const data = await upstream.json();
-      if (data.audio) {
+      // Unparseable 200 falls through to the 503, as in Next where
+      // `await res.json()` was inside the try.
+      const data = await readUpstreamJson(upstream);
+      if (data !== BODY_UNREADABLE && data.audio) {
         return res.json({
           audio: data.audio,
           language: data.language || segments[0].language,
@@ -228,7 +258,12 @@ export function createApp() {
       10000,
     );
 
-    if (upstream && upstream.ok) return res.json(await upstream.json());
+    if (upstream && upstream.ok) {
+      // An unparseable 200 degrades to the source-text fallback below, exactly
+      // as it did in Next where `await res.json()` was inside the try.
+      const data = await readUpstreamJson(upstream);
+      if (data !== BODY_UNREADABLE) return res.json(data);
+    }
     // Backend offline: return the originals so the UI degrades to English.
     return res.json({ translations: texts });
   });
