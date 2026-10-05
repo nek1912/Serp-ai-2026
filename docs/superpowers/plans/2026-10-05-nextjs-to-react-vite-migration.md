@@ -362,10 +362,17 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    include: [
+      "src/**/*.{test,spec}.{ts,tsx}",
+      "server/**/*.{test,spec}.js",
+    ],
   },
 });
 ```
+
+The `server/**` pattern is present from the start so Task 4's server tests are
+picked up without editing this file. They declare their own environment via a
+docblock, so the jsdom default does not apply to them.
 
 - [ ] **Step 8: Write `frontend-react/eslint.config.js`**
 
@@ -623,6 +630,10 @@ foreach ($f in $files) {
 
 Do not touch `dictionaries.ts` or any other file whose first line is not that
 exact directive.
+
+This step only covers files copied so far (`src/components/**`, `src/lib/**`,
+`src/types/**`). Pages are copied later in Task 5, which repeats this step for
+`src/pages/**`. Run it again at the end of Task 5.
 
 - [ ] **Step 5: Delete the dead `ur` dictionary block**
 
@@ -1335,7 +1346,8 @@ are used only by `/api/speak`.
 `server/__tests__/server.test.js`:
 
 ```js
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+// @vitest-environment node
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { createApp } from "../index.js";
 
 // Stub Clerk before the app is imported so no real network call is attempted.
@@ -1344,14 +1356,19 @@ vi.mock("@clerk/express", () => ({
   getAuth: () => ({ getToken: async () => "test-jwt" }),
 }));
 
+// One server for the whole file. Creating one per test would leak a listening
+// handle each time and leave Vitest unable to exit.
 let server;
 let base;
 
-beforeEach(async () => {
-  vi.restoreAllMocks();
+beforeAll(async () => {
   server = createApp().listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${server.address().port}`;
+});
+
+beforeEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -1537,9 +1554,8 @@ npx vitest run server/__tests__/server.test.js
 ```
 
 Expected: all tests pass. If `describe`/`it` are undefined, vitest is not
-picking up the file — confirm `vitest.config.mjs` `test.include` does not
-exclude `server/`. If it does, change `include` to
-`["src/**/*.{test,spec}.{ts,tsx}", "server/**/*.test.js"]`.
+picking up the file — confirm `vitest.config.mjs` `test.include` contains
+`"server/**/*.{test,spec}.js"` (Task 1, Step 7 adds it).
 
 - [ ] **Step 7: Verify SSE is not buffered end-to-end against a fake backend**
 
@@ -1647,7 +1663,27 @@ Expected count: `14` — 13 moved plus `NotFoundPage.tsx` from Task 1. Use
 `-LiteralPath` on the source so the `[slug]` brackets are not treated as
 wildcards.
 
-- [ ] **Step 2: Rename the default exports**
+- [ ] **Step 2: Strip `"use client"` from the moved pages**
+
+The pages were copied verbatim from `frontend/` and still carry the directive.
+Repeat the strip from Task 2, Step 4, scoped to `src/pages/`:
+
+```powershell
+$files = Get-ChildItem -LiteralPath "frontend-react\src\pages" -Filter *.tsx -File
+foreach ($f in $files) {
+  $lines = [System.IO.File]::ReadAllLines($f.FullName)
+  if ($lines.Count -gt 0 -and $lines[0].Trim() -eq '"use client";') {
+    $rest = if ($lines.Count -gt 1) { $lines[1..($lines.Count-1)] } else { @() }
+    [System.IO.File]::WriteAllLines($f.FullName, $rest)
+    "stripped: $($f.Name)"
+  }
+}
+```
+
+At least 13 files should print `stripped:` — every page except the two Clerk
+pages and `NotFoundPage.tsx`, which are authored in this task.
+
+- [ ] **Step 3: Rename the default exports**
 
 Each moved file currently has `export default function SomeName()`. React Router
 does not care about the function name, but each file also needs a **named**
@@ -1676,7 +1712,7 @@ the router. Verify one:
 Select-String -LiteralPath "frontend-react\src\pages\HomePage.tsx" -Pattern "export \{ default as HomePage \}"
 ```
 
-- [ ] **Step 3: Replace `next/link` in all 15 files**
+- [ ] **Step 4: Replace `next/link` in all 15 files**
 
 ```powershell
 $files = Get-ChildItem -LiteralPath "frontend-react\src" -Recurse -Include *.tsx -File
@@ -1692,7 +1728,7 @@ foreach ($f in $files) {
 
 `<Link href className>` is API-identical between the two, so no JSX changes.
 
-- [ ] **Step 4: Replace `next/navigation` in the 7 files**
+- [ ] **Step 5: Replace `next/navigation` in the 7 files**
 
 Six distinct transformations:
 
@@ -1746,7 +1782,7 @@ foreach ($r in $repl) {
 Every line must print `OK`. Any `MISS` means the source differs from what this
 plan recorded — read the file and fix that one by hand.
 
-- [ ] **Step 5: Remove the `<Suspense>` wrapper in ChatPage**
+- [ ] **Step 6: Remove the `<Suspense>` wrapper in ChatPage**
 
 Next forced this because `useSearchParams` triggers a CSR bailout. React Router
 does not.
@@ -1762,7 +1798,7 @@ Remove the `<Suspense fallback={…}>` and `</Suspense>` tags and the `Suspense`
 import, keeping `<ChatWindow />` and the page's own JSX. Re-read the file after
 editing to confirm the JSX still balances.
 
-- [ ] **Step 6: Write the two Clerk pages**
+- [ ] **Step 7: Write the two Clerk pages**
 
 `src/pages/SignInPage.tsx`:
 
@@ -1796,7 +1832,7 @@ These replace `app/sign-in/[[...sign-in]]/page.tsx` and
 `app/sign-up/[[...sign-up]]/page.tsx`, which rendered Clerk's catch-all
 components.
 
-- [ ] **Step 7: Write the real `src/App.tsx`**
+- [ ] **Step 8: Write the real `src/App.tsx`**
 
 ```tsx
 import { ClerkProvider } from "@clerk/react";
@@ -1859,15 +1895,14 @@ export default function App() {
 ```
 
 Body classes from `layout.tsx:93`
-(`min-h-full flex flex-col font-sans bg-[var(--canvas)]`) move into
-`globals.css`'s existing `@layer base` body rule during Step 9's verification —
-they cannot be set from JSX since Vite has no `<body>` element in the tree.
+(`min-h-full flex flex-col font-sans bg-[var(--canvas)]`) are moved into a
+separate stylesheet in Step 9 — they cannot be set from JSX because Vite renders
+into `#root` rather than owning `<body>`.
 
-- [ ] **Step 8: Move the body classes into globals.css**
+- [ ] **Step 9: Move the body classes into a separate stylesheet**
 
-`globals.css` must stay byte-identical (Global Constraint 7), so these are added
-as a **separate stylesheet**, not by editing `globals.css`. Create
-`src/styles/document.css`:
+`globals.css` must stay byte-for-byte identical (Global Constraint 8), so these
+go in a new file rather than being appended to it. Create `src/styles/document.css`:
 
 ```css
 /* Replaces the className on <body> from app/layout.tsx:93, which cannot be
@@ -1889,7 +1924,7 @@ import "./styles/globals.css";
 import "./styles/document.css";
 ```
 
-- [ ] **Step 9: Confirm zero Next.js references remain**
+- [ ] **Step 10: Confirm zero Next.js references remain**
 
 ```powershell
 Set-Location "A:\Serp-ai-2026\frontend-react"
@@ -1899,7 +1934,7 @@ Select-String -Path "src\**\*.tsx","src\**\*.ts","server\**\*.js","*.ts","*.js" 
 
 Expected: no output. Any hit is a missed replacement — fix it before committing.
 
-- [ ] **Step 10: Build**
+- [ ] **Step 11: Build**
 
 ```powershell
 npm run build
@@ -1908,7 +1943,7 @@ npm run build
 Expected: exit 0. Fix every reported error. Typical causes: a page importing
 `next/link` that Step 3 missed, or `Suspense` left dangling in Step 5.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```powershell
 Set-Location "A:\Serp-ai-2026"
