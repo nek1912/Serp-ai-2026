@@ -12,6 +12,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Fail loudly instead of silently auto-incrementing. The Clerk redirect
+    // URLs in .env.example (VITE_CLERK_SIGN_IN_URL / _SIGN_UP_URL) assume
+    // http://localhost:5173, so a drift to 5174 silently breaks sign-in and
+    // sign-up. A hard "port already in use" error is the correct failure.
+    strictPort: true,
     proxy: {
       // Stream SSE through untouched. `changeOrigin` keeps the Host header
       // consistent; no compression is applied by Vite's proxy, so tokens
