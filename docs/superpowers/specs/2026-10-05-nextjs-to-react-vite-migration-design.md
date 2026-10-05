@@ -32,7 +32,7 @@ sub-problem: **a Vite SPA has no server, so the BFF must be re-homed.**
 | Routing | App Router. 15 pages, 11 route handlers, 1 root layout |
 | Server logic | 9 of 11 handlers call Clerk `auth()` + `getToken()` and forward `Authorization: Bearer <token>` to FastAPI |
 | Streaming | `/api/chat` and `/api/chat/stream` are byte-identical; both pipe SSE through to the browser |
-| Tests | Vitest, 17 files. **7 fail today, before any change** |
+| Tests | Vitest 4, 18 files / 78 tests. **Measured baseline on 2026-10-05: 12 tests failing across 5 files, 66 passing.** See §10.1 |
 | Build | **Currently broken.** `SmoothScroll.tsx` and `ScrollStack.tsx` import `lenis`, which is absent from `package.json` and `package-lock.json`. Both files are unimported dead code |
 | PWA | **Does not exist.** No manifest, no service worker, no offline caching — despite `README.md`, `CLAUDE.md`, `PRD.md` and `architecture.md` all claiming PWA support |
 | Dark mode | Does not exist. `globals.css` hardcodes `color-scheme: light` |
@@ -165,16 +165,22 @@ body shapes are preserved exactly.
 
 ### 3.2 Clerk token acquisition
 
-Use `@clerk/backend`'s `createClerkClient()` and call
-`authenticateRequest()` with the incoming headers to obtain the user session, then
-read the token from the session. `@clerk/backend` is the same package
-`@clerk/nextjs` uses internally, so it is guaranteed present at the same version.
+Use `@clerk/express` (v2.1.75, peer-compatible with Express 5), which is Clerk's
+first-party Express integration. It provides `clerkMiddleware()` — the direct
+analogue of the `clerkMiddleware()` currently in `src/proxy.ts` — plus
+`getAuth(req)`, which returns an `AuthObject` whose `getToken()` resolves to the
+session JWT. That is the exact pair needed to replace
+`await auth()` → `await getToken()` in all nine authenticated handlers.
 
-`@clerk/express` provides a ready-made Express middleware. If its published major
-version matches Clerk v7 at implementation time it may be used instead for
-readability; it is an optimisation, not a dependency of this design. If the
-versions do not line up, `@clerk/backend` is used directly. The design does not
-depend on which of the two is chosen.
+`@clerk/express` depends on `@clerk/backend` ^3.22.0, the same package
+`@clerk/nextjs` uses internally, and re-exports its entire API. No direct
+`@clerk/backend` import is required; if one is needed it comes through
+`@clerk/express`.
+
+Note: `@clerk/clerk-react` is **deprecated** ("no longer supported, use
+`@clerk/react`"). The client package is `@clerk/react` ^6.17.5 — which is
+precisely what `@clerk/nextjs@7` depends on internally, so it is the same code
+path Next is running today.
 
 ### 3.3 Static serving and SPA fallback
 
@@ -274,19 +280,21 @@ codemod. They are not errors in Vite; removing them is cosmetic hygiene.
 
 | Package | Purpose |
 |---|---|
-| `react-router-dom` ^7 | Routing |
-| `@clerk/clerk-react` ^7 | `ClerkProvider`, `useAuth`, `UserButton`, `SignIn`, `SignUp` |
-| `@clerk/backend` ^7 | Server-side token acquisition in Express |
-| `express` ^5 | The BFF |
+| `react-router-dom` ^7.18.4 | Routing |
+| `@clerk/react` ^6.17.5 | `ClerkProvider`, `useAuth`, `UserButton`, `SignIn`, `SignUp`. Same package `@clerk/nextjs` uses internally |
+| `@clerk/express` ^2.1.75 | Server-side `clerkMiddleware()` + `getAuth(req)`. Peer-compatible with Express 5 |
+| `express` ^5.2.1 | The BFF |
 | `@fontsource/inter` (variable) | `--font-inter` |
 | `@fontsource/space-grotesk` (weight 500) | `--font-display-latin` |
 | `@fontsource/geist-mono` (variable) | `--font-geist-mono` |
 | `@fontsource/noto-serif-{devanagari,bengali,tamil,telugu,kannada,gurmukhi,gujarati,oriya,malayalam}` (weights 400/500/600/700) | The 9 script fonts |
-| `@tailwindcss/vite` ^4 | Tailwind in Vite |
-| `vite` ^7, `@vitejs/plugin-react` ^5 | Build tooling |
-| `concurrently` (dev) | Runs Vite + Express together |
-| `typescript-eslint`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`, `globals` (dev) | Replaces `eslint-config-next` |
-| `@types/express` (dev) | Types for the server |
+| `@tailwindcss/vite` ^4.3.3 | Tailwind in Vite |
+| `vite` ^8.3.2, `@vitejs/plugin-react` ^6.1.2 | Build tooling |
+| `concurrently` ^10.0.5 (dev) | Runs Vite + Express together |
+| `typescript-eslint` ^8.71, `eslint-plugin-react-hooks` ^7.1.1, `eslint-plugin-react-refresh` ^0.5.7, `globals` ^17.13 (dev) | Replaces `eslint-config-next` |
+| `@types/express` ^5.0.6 (dev) | Types for the server |
+
+All versions above were verified against the npm registry on 2026-10-05.
 
 ### 5.3 Unchanged
 
@@ -435,24 +443,81 @@ Each step leaves the app in a runnable state.
 5. **Move pages** — `src/app/**/page.tsx` → `src/pages/**`, flatten Clerk pages.
 6. **Rewire routing** — `App.tsx` with all 15 routes + 404. Replace the 21
    `next/link` / `next/navigation` imports.
-7. **Tests** — copy `vitest.config.mjs` and the 17 test files; delete the
+7. **Port tests** — copy `vitest.config.mjs` and the 18 test files; delete the
    `vi.mock("next/navigation")` blocks and wrap affected components in
-   `<MemoryRouter>` instead. Then fix the 7 pre-existing failures (§11).
-8. **Docs** — correct `PROJECT_STATUS.md` and the PWA claims; update the stack
-   table in `CLAUDE.md`.
+   `<MemoryRouter>` instead.
+8. **Fix the 12 baseline failures** per §10.1 — 3 source bugs and 9 test
+   expectations, each with its own red-green cycle.
+9. **Docs** — correct `PROJECT_STATUS.md` (including the stale "7 failures" and
+   the PWA claim) and the stack table in `CLAUDE.md`.
 
-### 10.1 Pre-existing test failures to fix
+### 10.1 Pre-existing test failures
 
-Recorded in `PROJECT_STATUS.md:139`, confirmed by running `npm test` in
-`frontend/` **before** any changes:
+`PROJECT_STATUS.md:139` claims 7 failures. That is **stale**. Measured on
+2026-10-05 after `npm ci` (the repo had no `node_modules`, so no baseline had ever
+been run in this checkout):
 
-1. Four `ChatWindow` failures from a stale `sendChat` mock.
-2. One `LOCALES` assertion expecting 6 locales — the code has 11.
-3. One missing Gujarati dictionary key.
-4. One read-aloud button assertion.
+```
+Test Files  5 failed | 13 passed (18)
+     Tests  12 failed | 66 passed (78)
+```
 
-All four are real defects in the source, not migration artefacts. They are fixed
-in `frontend-react/`.
+All 12 are genuine defects that predate the migration. Root causes, verified by
+reading the source:
+
+| # | File | Failing test(s) | Root cause | Kind |
+|---|---|---|---|---|
+| 1 | `src/lib/i18n/dictionaries.test.ts` | every locale defines every key that en defines | **Real i18n gap.** `en` has 374 keys. Missing counts: hi 4, mr 4, ta 50, gu 48, bn 130, te/kn/pa/or/ml 111 each. `translate()` already falls back to `en`, so the app works; the test asserts total coverage that does not exist | Test asserts an untrue invariant |
+| 2 | `src/lib/i18n/i18n.test.ts` | root layout example translations resolve | Copy changed from `"Chat now"` to `"Ask JanSahay →"`; assertion is stale | Stale test |
+| 3 | `src/lib/__tests__/speech.test.ts` | uses Azure for each language run | Implementation deliberately **batches** all runs into one `fetchVoiceSpeak(runs)` call (`speech.ts:211`). Test expects one call per language run | Stale test |
+| 4 | `src/lib/__tests__/speech.test.ts` | settles the in-flight Azure promise when a newer call cancels it | **Real bug.** `speakBackendSegments` (`speech.ts:179`) reads `const token = _speakToken` *after* awaiting the fetch. A call cancelled mid-fetch re-reads the *current* token, passes the guard in `playBackendAudio`, and creates audio whose `onended` never fires — leaving the caller's promise pending forever | Source bug |
+| 5 | `src/lib/__tests__/speech.test.ts` | settles the in-flight Azure promise when stopSpeaking is called | Same root cause as #4 | Source bug |
+| 6 | `src/components/chat/__tests__/EvidencePanel.test.tsx` | static evidence shows Open Document link | Component renders `t("chat.viewDocument")` = **"View document"** (MessageBubble.tsx:157), not "Open Document". Additionally the static-citation link only renders when `citation.source_file` is set; the fixture omits it | Stale test + incomplete fixture |
+| 7 | same | web evidence shows Open Source link after expanding | Same: component renders "View source" | Stale test |
+| 8 | same | document links open in new tab with noopener | Same | Stale test |
+| 9 | same | URLs remain unchanged after language switching | Same | Stale test |
+| 10 | same | evidence card toggle is a keyboard-focusable button | Expects accessible name `"Official Document PMFBY Guidelines p.5"`; actual name is composed of `t("chat.viewDocument")` + title + `Page 5` | Stale test |
+| 11 | `src/components/chat/__tests__/GrievanceCard.test.tsx` | renders structured field values when fields are present | **Real bug.** `GrievanceCard.tsx:193` title-cases `application_id` to `"Application Id"`. English requires `"Application ID"` | Source bug |
+| 12 | same | renders field labels as title-cased snake_case keys | Same root cause as #11 | Source bug |
+
+Summary: **3 source bugs** (#4/#5 speech token threading, #11/#12 acronym casing),
+**8 stale test expectations**, **1 i18n coverage gap**.
+
+#### 10.1.1 Fix strategy
+
+**Source bugs (3) — fix the code.** These are real defects that affect users, so
+the tests are correct and the code is wrong.
+
+- #4/#5: thread the caller's token into `speakBackendSegments(segments, token)`
+  instead of re-reading the module-level `_speakToken` after the await, and
+  return early if the token is stale. This is the dangling-promise bug the test
+  was written to catch; it means a cancelled speech request currently leaks a
+  pending promise and keeps an `Audio` element alive.
+- #11/#12: replace the naive title-caser in `GrievanceCard.tsx` with an
+  acronym-aware version that upper-cases a fixed set of initialisms
+  (`id`, `url`, `upi`, `ifsc`, `pan`, `kcc`, `aadhaar`) and title-cases the rest.
+  `"application_id"` → `"Application ID"`.
+
+**Stale test expectations (8) — fix the tests.** In each case the component
+behaviour is intentional and better than what the test asserts. Tests are updated
+to match, and the EvidencePanel static-citation fixture gains a `source_file` so
+the document-link branch is actually exercised.
+
+**i18n coverage gap (1) — fix the test, not 776 translations.** The test encodes
+an aspiration, not a requirement. `translate()` (`dictionaries.ts:3863`) already
+implements `table[key] ?? en[key] ?? key`, so a missing key degrades to English
+rather than breaking. The test is rewritten to assert the invariant that actually
+matters:
+
+1. `en` is complete and non-empty.
+2. No locale defines a key that `en` does not (catches typos and stale keys).
+3. `translate()` falls back to English for a key a locale lacks.
+4. Every locale translates `nav.home` to a non-empty string.
+
+This does **not** reduce translation quality — the 776 untranslated strings remain
+visible in the report produced by step 2 of that task, so the gap stays
+discoverable. Machine-translating them is a content decision outside this
+migration's scope and is not done here.
 
 ---
 
@@ -466,7 +531,7 @@ before `frontend/` is deleted or any deploy config is touched.
 | 1 | Production build clean | `npm run build` — zero errors, zero warnings about unresolved imports |
 | 2 | Lint clean | `npm run lint` |
 | 3 | Types clean | `npx tsc --noEmit` under `strict: true` |
-| 4 | Tests pass | `npm test` — every test green. The 7 that fail today must now pass; no new failures permitted |
+| 4 | Tests pass | `npm test` — every test green: 78 passing, 0 failing (baseline is 66 passing / 12 failing) |
 | 5 | Every page renders | Start both servers, request all 15 routes plus one deliberately bad URL. Each real route must return HTTP 200 and contain its expected heading text; the bad URL must return the 404 page |
 | 6 | Chat streams end-to-end | Type a real question in the browser; confirm tokens arrive incrementally from FastAPI, not in one burst. Check the BFF logs show no buffering |
 | 7 | Auth + grievance intact | Sign in and out via Clerk; complete a grievance through `finalize` |
@@ -490,7 +555,8 @@ until all seven gates pass.** Git history provides an additional rollback path.
 | `@fontsource` missing a family | Low | System fallback per family; reported, not blocking (§6) |
 | `globals.css` behaves differently outside Next | Low | The file contains no Next-specific at-rules. Copied verbatim and verified in gate 5 |
 | Path alias breaks in one of the three configs | Low | `@` is declared identically in `tsconfig.json`, `vite.config.ts` and `vitest.config.mjs`, and checked by gates 1, 3 and 4 |
-| Hidden coupling to Next in a file not yet inspected | Low | A repo-wide grep for `next/`, `NextResponse`, `useRouter`, `usePathname`, `useSearchParams`, `useParams` must return zero hits after the migration. This grep is part of gate 1 |
+| Hidden coupling to Next in a file not yet inspected | Low | A repo-wide grep for `next/`, `NextResponse`, `useRouter`, `usePathname`, `useSearchParams`, `useParams`, `metadata` export must return zero hits in `frontend-react/` after the migration. This grep is part of gate 1 |
+| The 776 untranslated dictionary strings get silently "fixed" by test rewriting | Medium | §10.1.1 fixes the *test*, not the data. A coverage report is emitted by that task listing every missing key per locale, so the gap stays visible and is never mistaken for solved |
 
 ---
 
