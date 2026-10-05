@@ -134,3 +134,9 @@ domain routing → hybrid RAG (static pgvector + web) → grounded, cited answer
 with correct abstention on unsupported questions, and grievances can be created
 with multi-turn intake + status lookup guidance. Voice (STT/TTS) working via
 Sarvam AI.
+
+> **Post-MVP current state (2026-10-06, see PROJECT_STATUS.md):** 11 languages
+> (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML); SerpApi Google live alongside
+> Tavily; bounded WebDiscovery recovery (≤2 rounds) with cooperative deadline;
+> mandatory Clerk auth on chat/voice/grievance-write. PRD above is the frozen
+> MVP contract; code truth lives in `AGENTS.md` + `PROJECT_STATUS.md`.

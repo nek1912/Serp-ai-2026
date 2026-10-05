@@ -280,6 +280,9 @@ class RAGResponse(BaseModel):
     follow_up_question: str | None = None
     mode: str = "rag"
     conversation_id: str = ""
+    # P1-5: structured referral on unresolved abstention (None when
+    # answered or when no authority is confidently known).
+    referral: dict | None = None
 
 
 # ---------------------------------------------------------------------------

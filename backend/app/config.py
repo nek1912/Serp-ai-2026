@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     tavily_api_key_2: str = ""
     firecrawl_api_key: str = ""
     firecrawl_api_url: str = "https://api.firecrawl.dev/v1"
+    serpapi_api_key_1: str = ""
+    serpapi_api_key_2: str = ""
     search_providers: str = "tavily"
 
     # Grievance & evidence

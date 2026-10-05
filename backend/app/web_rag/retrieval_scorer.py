@@ -29,6 +29,29 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from app.web_rag.validity import (
+    UNKNOWN_STATUS,
+    query_years,
+    resolve_case_date,
+    validity_preference,
+)
+from app.web_rag.expansion import (
+    assumed_dampen_factor,
+    exception_demotion,
+    home_evidence_present,
+)
+from app.web_rag.identifiers import (
+    extract_query_identifiers,
+    identifier_match_score,
+)
+from app.web_rag.mandate_map import (
+    document_role,
+    jurisdiction_penalty,
+    mandate_fit,
+    query_subjects,
+    role_bonus,
+)
+
 
 SERVICE_INTENTS = {
     "APPLICATION",
@@ -217,16 +240,37 @@ def freshness_bonus(
     url: str,
     intent: str,
     query: str,
+    validity: dict | None = None,
+    case: dict | None = None,
 ) -> float:
     """
-    Very light, purely defensive freshness signal.
+    P0-2 validity-aware freshness signal.
 
-    Only applied for subsidy/amount/deadline/status intents or when
-    the query explicitly asks for latest/current/new. Uses a year
-    present in the URL path (e.g. /2025/ or /file/2026) as a weak
-    proxy for recency. If no year is found, no bonus is applied and
-    no candidate is penalized.
+    When a validity record carries stated signals, rank by validity for
+    the user's case date (valid > unknown > superseded/expired/future),
+    NOT by raw recency. When validity is unknown/absent, fall back to
+    the legacy defensive URL-path year proxy (0.08) as a pure
+    tiebreaker — no candidate is ever penalized for lacking a year.
     """
+    if validity:
+        status = str(
+            validity.get("supersession_status") or UNKNOWN_STATUS
+        ).lower()
+
+        has_signal = (
+            status != UNKNOWN_STATUS
+            or validity.get("effective_from")
+            or validity.get("effective_to")
+            or validity.get("season")
+            or validity.get("fy")
+            or validity.get("published_date")
+            or validity.get("instrument_id")
+            or validity.get("revision_label")
+        )
+
+        if has_signal:
+            return validity_preference(validity, case)
+
     if intent not in _FRESH_INTENTS:
         q = query.lower()
         if not any(w in q for w in ["latest", "current", "new", "recent", "2025", "2026", "amount", "subsidy"]):
@@ -244,24 +288,36 @@ def geo_bonus(
     url: str,
     state: str | None,
     query: str,
+    district: str | None = None,
+    title: str = "",
+    text: str = "",
 ) -> float:
     """
     When a query is state-specific, lightly boost results whose
     domain or path references that state. National queries receive
     no state bias. State short-names such as 'guj' on .nic.in
     subdomains are handled separately by matching known fragments.
+
+    P0-1 district signal: an explicitly resolved district named in
+    the result title/text earns a small bonus (sub-state targeting
+    for ranking only — never a filter).
     """
-    if not state:
-        return 0.0
-    domain = normalize_domain(url)
-    state_l = state.lower()
-    blob = domain + " " + _path(url)
-    if state_l in blob:
-        return 0.18
-    first_word = state_l.split()[0]
-    if first_word in blob:
-        return 0.12
-    return 0.0
+    bonus = 0.0
+    if state:
+        domain = normalize_domain(url)
+        state_l = state.lower()
+        blob = domain + " " + _path(url)
+        if state_l in blob:
+            bonus += 0.18
+        else:
+            first_word = state_l.split()[0]
+            if first_word in blob:
+                bonus += 0.12
+    if district:
+        haystack = f"{title or ''}\n{(text or '')[:2000]}".lower()
+        if district.lower() in haystack:
+            bonus += 0.15
+    return bonus
 
 
 def diversity_penalty(
@@ -341,6 +397,8 @@ def rescore(
     results: list[dict],
     classification,
     top_k: int | None = None,
+    as_of_date: str | None = None,
+    expansion_terms: list | None = None,
 ) -> list[dict]:
     """
     Re-orders a list of already-BM25-ranked web chunks using the
@@ -349,9 +407,17 @@ def rescore(
     ``classification`` is the existing QueryClassification object
     (or any object exposing .intent and .state).
 
+    ``as_of_date`` (P0-2, optional ISO string) anchors validity
+    comparison; without it, the classifier's case_year/season is used,
+    and without either, unknown-validity results are not penalized.
+
     Preserves every existing key on each result; only adds new keys
     (``source_tier``, ``service_fit``, ``page_relevance_score``,
-    ``freshness_score``, ``geo_score``, ``diversity_penalty``,
+    ``freshness_score``, ``validity_status``, ``mandate_fit``,
+    ``assumed_dampen``, ``document_role``, ``role_bonus``,
+    ``jurisdiction_penalty``,
+    ``exception_penalty``, ``expansion_bonus``, ``identifier_bonus``,
+    ``suspicion_penalty``, ``geo_score``, ``diversity_penalty``,
     ``retrieval_quality_score``).
 
     Returns a new list in the improved order. If the input is empty
@@ -373,6 +439,38 @@ def rescore(
     state = getattr(classification, "state", None)
 
     informational = (intent in {"INFORMATIONAL"})
+
+    case = resolve_case_date(
+        as_of_date,
+        case_year=getattr(classification, "case_year", None),
+        season=getattr(classification, "season", None),
+    )
+    case["query_years"] = query_years(query)
+
+    # P0-3: question-relative authority — mandate subjects for this query.
+    subjects = query_subjects(
+        getattr(classification, "domain", None),
+        getattr(classification, "society_type", None),
+    )
+    society_type = getattr(classification, "society_type", None)
+    jurisdiction_source = getattr(classification, "jurisdiction_source", "none")
+
+    # P2-1: home-instrument gate for opt-out demotion + expansion-term
+    # overlap support for appended verified vocabulary.
+    home_present = home_evidence_present(
+        results, getattr(classification, "state", None)
+    )
+    expansion_terms = [str(t).lower() for t in (expansion_terms or []) if t]
+    # P2-2: assumed-state dampening for opt-out national subjects.
+    # Explicit state keeps full weight; assumed state halves geo and
+    # mandate-fit influence (branches preserved, influence shrinks).
+    dampen = assumed_dampen_factor(
+        subjects, bool(getattr(classification, "assumed_state", False))
+    )
+
+    # P1-7: labeled identifiers in the (numeral-normalized) query for
+    # exact/near-exact instrument matching.
+    query_ids = extract_query_identifiers(query)
 
     raw: list[dict] = []
 
@@ -402,9 +500,40 @@ def rescore(
 
         service = service_fit_score(url, title, intent)
         page = page_relevance(url, title, text, query)
-        fresh = freshness_bonus(url, intent, query)
-        geo = geo_bonus(url, state, query)
+        validity = result.get("validity") if isinstance(result.get("validity"), dict) else None
+        fresh = freshness_bonus(url, intent, query, validity=validity, case=case)
+        geo = geo_bonus(
+            url, state, query,
+            district=getattr(classification, "district", None),
+            title=title, text=text,
+        ) * dampen
         low_authority = _is_low_authority(url)
+        fit = mandate_fit(url, subjects, state, society_type) * dampen
+        role = document_role(url, title, official, trusted_secondary)
+        role_b = role_bonus(role, intent)
+        jurisdiction_p = jurisdiction_penalty(
+            url, state, society_type, jurisdiction_source
+        )
+        # P2-1: scheme opt-out demotion (data-driven, demotion-only,
+        # instruments never demoted, single-state scoped).
+        exception_p = exception_demotion(
+            url, role, subjects, state, home_present
+        )
+        # P2-1: expansion-term overlap support — appended verified
+        # vocabulary matching result text earns a bounded bonus.
+        expansion_b = 0.0
+        if expansion_terms:
+            blob = f"{title} {(text or '')[:2000]}".lower()
+            hits = sum(1 for term in expansion_terms if term and term in blob)
+            expansion_b = min(0.30, 0.10 * hits)
+        identifier_b = identifier_match_score(query_ids, validity)
+        impersonation = result.get("impersonation")
+        quarantined = bool(
+            isinstance(impersonation, dict) and impersonation.get("suspicious")
+        )
+        # P1-6: fraud risk outranks staleness. Quarantined chunks stay
+        # retrievable as leads but can never top authoritative evidence.
+        suspicion_penalty = 1.50 if quarantined else 0.0
 
         raw.append({
             "idx": idx,
@@ -419,6 +548,15 @@ def rescore(
             "fresh": fresh,
             "geo": geo,
             "low_authority": low_authority,
+            "fit": fit,
+            "role": role,
+            "role_b": role_b,
+            "jurisdiction_p": jurisdiction_p,
+            "exception_p": exception_p,
+            "expansion_b": expansion_b,
+            "identifier_b": identifier_b,
+            "quarantined": quarantined,
+            "suspicion": suspicion_penalty,
             "official": official,
         })
 
@@ -444,6 +582,13 @@ def rescore(
             + r["page"]
             + r["fresh"]
             + r["geo"]
+            + r["fit"]
+            + r["role_b"]
+            + r["identifier_b"]
+            + r["jurisdiction_p"]
+            + r["exception_p"]
+            + r["expansion_b"]
+            - r["suspicion"]
             - third_party_penalty
         )
 
@@ -457,6 +602,20 @@ def rescore(
         result["service_fit"] = round(r["service"], 4)
         result["page_relevance_score"] = round(r["page"], 4)
         result["freshness_score"] = round(r["fresh"], 4)
+        result["mandate_fit"] = round(r["fit"], 4)
+        result["assumed_dampen"] = dampen
+        result["document_role"] = r["role"]
+        result["role_bonus"] = round(r["role_b"], 4)
+        result["jurisdiction_penalty"] = round(r["jurisdiction_p"], 4)
+        result["exception_penalty"] = round(r["exception_p"], 4)
+        result["expansion_bonus"] = round(r["expansion_b"], 4)
+        result["identifier_bonus"] = round(r["identifier_b"], 4)
+        result["suspicion_penalty"] = round(r["suspicion"], 4)
+        validity_status = None
+        validity_record = r["result"].get("validity")
+        if isinstance(validity_record, dict):
+            validity_status = validity_record.get("supersession_status")
+        result["validity_status"] = validity_status
         result["geo_score"] = round(r["geo"], 4)
         result["third_party_penalty"] = round(third_party_penalty, 4)
 

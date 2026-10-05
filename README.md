@@ -1,6 +1,6 @@
-# JanSayah — Multilingual Cooperative Governance & Legal Assistance Chatbot
+# JanSahay — Multilingual Cooperative Governance & Legal Assistance Chatbot
 
-Evidence-grounded, multilingual (English + Hindi + Gujarati + Marathi + Bengali + Tamil)
+Evidence-grounded, multilingual (English + Hindi + Gujarati + Marathi + Bengali + Tamil + Telugu + Kannada + Punjabi + Odia + Malayalam)
 citizen-assistance PWA for cooperative governance, legal guidance, schemes, PMFBY,
 financial literacy, and grievance redressal.
 
@@ -14,9 +14,8 @@ financial literacy, and grievance redressal.
 ## What It Does
 
 - Answers questions from official government sources with verifiable citations
-- **6 languages**: English, Hindi, Gujarati, Marathi, Bengali, Tamil
-- Routes queries across 7 domains: cooperative, PACS, schemes, PMFBY, agriculture,
-  financial literacy, grievance
+- **11 languages**: English, Hindi, Gujarati, Marathi, Bengali, Tamil, Telugu, Kannada, Punjabi, Odia, Malayalam
+- Routes queries across 7 AnchorStore domains: agriculture, financial_inclusion, grievance, pacs_computerization, pacs_governance, pmfby, schemes (+ `out_of_scope`)
 - Applies jurisdiction filtering (central + selected state — currently Gujarat)
 - **Hybrid retrieval**: dense vector search (pgvector) + lexical search (RRF fusion)
 - Abstains when evidence is insufficient — never guesses
@@ -33,8 +32,9 @@ financial literacy, and grievance redressal.
 ```
 Next.js PWA ──▶ FastAPI API ──▶ Domain Router (keyword + anchor + LLM)
                                        │
-                                       ├─▶ Hybrid retrieval (dense pgvector + lexical)
-                                       │       └─▶ optional reranker (wired, OFF by default)
+                                        ├─▶ Hybrid retrieval (dense pgvector + lexical)
+                                        │       └─▶ optional reranker (wired, OFF by default)
+                                        ├─▶ Web discovery (Tavily + SerpApi Google, bounded concurrent branches)
                                        ├─▶ Evidence gate (abstention if no citation)
                                        ├─▶ Citation verifier
                                        └─▶ Grounded LLM (Groq primary, Gemini fallback)
@@ -56,7 +56,7 @@ low-confidence or uncited result into an answer.
 | Backend | FastAPI (Python 3.11+) |
 | Database | Supabase Postgres + pgvector (HNSW cosine index) |
 | Embeddings | Jina Embeddings v3 (`jina-embeddings-v3`), 768d |
-| LLM | Groq (`openai/gpt-oss-120b` primary, `qwen/qwen3.8-27b` fallback), Gemini 2.5 Flash ultimate fallback |
+| LLM | Groq (primary) + Gemini (fallback); model names come from `GROQ_MODEL` / `GROQ_FALLBACK_MODEL` / `GEMINI_MODEL` env (`config.py` defaults are empty; note `.env.example` still names the retired `llama-3.3-70b-versatile` — do not use it) |
 | Reranker | Jina reranker (wired, disabled — `RERANKER_ENABLED=false`) |
 | Voice | Sarvam AI (STT + TTS) primary, Azure fallback, text-only final |
 | Document parsing | MinerU `content_list_v2.json` |
@@ -69,7 +69,7 @@ low-confidence or uncited result into an answer.
 ```
 backend/
   app/
-    main.py                FastAPI entrypoint (6 routers: chat, voice, conversations, evidence, grievance, documents)
+    main.py                FastAPI entrypoint (8 routers: chat, voice, conversations, evidence, grievance, documents, translate, webhooks)
     routes/
       chat.py              /chat + /chat/stream — language detect → domain classify → RAGOrchestrator or GrievanceWorkflow
       voice.py             /voice, /voice/transcribe, /voice/speak
@@ -88,7 +88,7 @@ backend/
     services/
       rag_orchestrator.py  async dual-pipeline (static + web), asyncio.gather, merge, generate, verify
       static_rag.py        Supabase pgvector hybrid retrieval (dense + lexical RRF)
-      web_rag.py           10-step web RAG: Tavily/Firecrawl → BM25 → Gemini rerank → source verify
+      web_rag.py           10-step web RAG: Tavily/SerpApi-Google/Firecrawl → BM25 → Gemini rerank → source verify
       voice_service.py     STT/TTS with provider fallback (Sarvam → Azure)
       lang_memory.py       language preference memory
     grievance/             9-stage state machine
@@ -102,8 +102,12 @@ backend/
       status_lookup.py     status check guidance
       models.py            GrievanceState, GrievanceDraft, GrievanceTurn, etc.
     retrieval/             bm25_retriever.py, gemini_reranker.py, rrf.py
-    web_rag/               service.py (WebDiscoveryService), query_classifier.py,
-                           tavily_client.py, firecrawl_client.py
+    web_rag/               service.py (WebDiscoveryService: bounded concurrent branches × provider fan-out, MAX_BRANCHES=8), query_classifier.py,
+                           serpapi_client.py (SerpApi Google engine), tavily_client.py, firecrawl_client.py, providers.py (factory),
+                           recovery.py (≤2 single-axis recovery rounds + cooperative `deadline`), referrals.py (abstention referrals),
+                           mandate_map.py (+.json authority map), validity.py, leads.py, clusters.py, diversity.py,
+                           facets.py, identifiers.py, impersonation.py, expansion.py (+.json), lexicon.py (+.json),
+                           status.py, retrieval_scorer.py
     security/              source_verifier.py (trust-score filtering)
     data/                  keyword_rules.json, domain_anchors.json
   seed_parser.py           MinerU content_list_v2.json → canonical chunk JSONL
@@ -128,7 +132,7 @@ frontend/
     ui/                     Button, Badge, Icons, etc.
   src/lib/
     api.ts                  Backend API client
-    i18n/                   6-language i18n provider + dictionaries
+    i18n/                   11-language i18n provider + dictionaries
     data/                   schemes, services, library data
     speech.ts               Browser speech recording
 
@@ -177,9 +181,14 @@ SUPABASE_SERVICE_KEY=     # Supabase service role key
 JINA_API_KEY=             # Jina embeddings
 GROQ_API_KEY=             # Groq LLM
 GEMINI_API_KEY=           # Gemini fallback LLM
-SARVAM_API_KEY=           # Sarvam AI voice (STT + TTS)
-TAVILY_API_KEY=           # Tavily web search (dynamic RAG)
+SARVAM_API_KEY=           # Sarvam AI voice (STT + TTS) + translation
+TAVILY_API_KEY_1=         # Tavily web search (dynamic RAG; _2 = rotation spare)
+SERPAPI_API_KEY_1=        # SerpApi Google web search (_2 = fallback spare)
+SEARCH_PROVIDERS=         # e.g. tavily,serpapi (.env.example default: tavily,firecrawl)
+WEB_RAG_TIMEOUT_S=        # outer WebRAG budget in seconds (code default 30.0)
 RERANKER_ENABLED=false    # reranker is wired but OFF (see PROJECT_STATUS)
+CLERK_SECRET_KEY=         # Clerk auth (required for /chat, /voice, grievance-write)
+CLERK_ISSUER=             # e.g. https://<instance>.clerk.accounts.dev
 ```
 
 ### Database Setup
@@ -218,6 +227,11 @@ Current frozen corpus: **11 documents, 4,778 embedded chunks (768d Jina v3)**.
 | Marathi | `mr` | Full support |
 | Bengali | `bn` | Full support |
 | Tamil | `ta` | Full support |
+| Telugu | `te` | Full support |
+| Kannada | `kn` | Full support |
+| Punjabi | `pa` | Full support |
+| Odia | `or` | Full support |
+| Malayalam | `ml` | Full support |
 
 All UI strings translated. Backend responds in the same language as the question.
 
@@ -233,10 +247,15 @@ All UI strings translated. Backend responds in the same language as the question
 - Abstains when evidence insufficient
 
 ### Dynamic RAG (Web-Grounded)
-- Tavily web search for current information
+- Tavily + SerpApi Google web search for current information (bounded concurrent branches × provider fan-out; SerpApi Search Index evaluated 2026-10-05 and rejected)
+- Bounded recovery: ≤2 single-axis rounds (`recovery.py`); cooperative deadline — no new round starts past `started + web_rag_timeout_s` (task cancellation can't stop the worker thread)
 - Gemini reranker for semantic scoring
-- Answer generation with Groq primary (`openai/gpt-oss-120b`), Gemini fallback
+- Answer generation with Groq primary, Gemini fallback (model names from env)
 - Language-matching: responds in same language as question
+
+### Auth + frontend proxy
+- `/chat`, `/chat/stream` (and grievance-write/voice) require a Clerk JWT → `401 {"detail":"Not authenticated"}` without it
+- `BACKEND_API_URL` is the backend BASE (e.g. `http://localhost:8000`); `/api/chat`→`{base}/chat`, `/api/chat/stream`→`{base}/chat/stream`. A 503 means the backend is unreachable; restart `npm run dev` after changing `frontend/.env.local`
 
 ---
 

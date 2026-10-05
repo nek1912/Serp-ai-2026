@@ -1,8 +1,8 @@
 import { auth } from "@clerk/nextjs/server";
 
 /**
- * Server API route /api/chat/stream
- * SSE proxy to the Python RAG backend streaming endpoint.
+ * Server API route /api/chat
+ * JSON proxy to the Python RAG backend non-streaming endpoint.
  */
 
 export async function POST(req: Request) {
@@ -18,8 +18,10 @@ export async function POST(req: Request) {
 
   const { getToken } = await auth();
   const token = await getToken();
-  const backendUrl = process.env.BACKEND_API_URL?.replace(/\/chat$/, "/chat/stream")
-    || "http://localhost:8000/chat/stream";
+  // BACKEND_API_URL is the base (e.g. http://localhost:8000). Strip any
+  // legacy /chat or /chat/stream suffix so both old and new env values work.
+  const rawBase = process.env.BACKEND_API_URL || "http://localhost:8000";
+  const backendUrl = `${rawBase.replace(/\/chat(\/stream)?$/, "")}/chat`;
 
   try {
     const backendRes = await fetch(backendUrl, {
@@ -47,9 +49,10 @@ export async function POST(req: Request) {
         "X-Accel-Buffering": "no",
       },
     });
-  } catch {
+  } catch (err) {
+    console.error(`[api/chat] backend unreachable: ${backendUrl}`, err);
     return new Response(
-      JSON.stringify({ error: "retrieval_backend_unavailable", detail: "backend unreachable" }),
+      JSON.stringify({ error: "retrieval_backend_unavailable", detail: `backend unreachable: ${backendUrl}` }),
       { status: 503, headers: { "Content-Type": "application/json" } },
     );
   }

@@ -136,6 +136,49 @@ Each entry: what changed, why, what it replaced, when.
 ---
 
 ### Session isolation via useRef in ChatWindow
-**Date:** 2026-09-10
+**Date:** 2026-10-10
 **What:** `sessionId` in `ChatWindow.tsx` changed from `useState` to `useRef` + `resetSessionId()`. Reset on new-chat, load-conversation, delete-conversation, clear-all-history, and URL query param handlers.
 **Why:** `useState` created `sessionId` once and never reset it, causing grievance state to leak across "New Chat" actions. Backend fresh-state defense in `GrievanceWorkflow.process_message()` complements this by detecting new complaints after completed grievances.
+
+---
+
+### SerpApi Search Index rejected for the hackathon (decision A)
+**Date:** 2026-10-05
+**What:** `engine=search_index` was tested live with the existing SerpApi key against post-Sarvam canonical queries (15-scenario matrix + corrected multilingual re-audit). Not integrated; `providers.py` factory and `_search_all()` fan-out unchanged.
+**Why:** Endpoint works (HTTP 200, structured `organic_results`), but no full-pipeline rescue demonstrated (static-insufficient + Tavily/Google-weak + Index-authoritative + gate-accepted never co-occurred); ignores `site:`/`OR` operators the query builder relies on; substantial wrong-jurisdiction government noise; ~2× SerpApi call cost. Do not revisit before the hackathon.
+
+---
+
+### Final WebDiscovery hardening H1+H2+H3/H4 (then freeze)
+**Date:** 2026-10-05
+**What:** `mandate_map.py:37` agriculture subjects += `crop_relief`, `crop_insurance` (H1, data-only) · `query_classifier.py` ≥2-distinct-explicit-states + society-context gate → `mscs`/central (H2) + `mscs`,`crcs`→cooperative keywords (H3) + `pmjjby`,`pmsby`→schemes keywords (H4; `apy` skipped — substring of "therapy"). Readiness U-AG-1 now Gujarat-GR-top-1, U-MS-1 now CRCS-top.
+**Why:** Last two known wrong-top answers from the final readiness audit; minutes-scale data-only fixes with measured zero fallout (comparison questions, Gujarat-only and explicit-MSCS paths verified unchanged).
+
+---
+
+### WebDiscovery concurrency frozen
+**Date:** 2026-10-05
+**What:** `_search_branches()` × `_search_all()` `ThreadPoolExecutor` fan-out, `MAX_BRANCHES=8`, per-provider timeout 5s, `web_rag_timeout_s=30.0`, provider/branch failure isolation — verified by audit + timing probes (branch scaling flat: 1/4/8 branches ≈ same wall-clock) and locked by tests (`test_web_discovery_providers.py`, `test_facets_p0.py` concurrency lock-ins).
+**Why:** Adequate bounded parallelism already exists. No asyncio in WebDiscovery, no new/wider executors, no new providers, no reranker change without new evidence.
+
+---
+
+### Cooperative deadline for WebRAG recovery (timeout lifecycle fix)
+**Date:** 2026-10-06
+**What:** `WebRAGService.retrieve()` accepts an optional absolute `deadline` (`time.monotonic()`). The initial attempt always runs; no NEW recovery round starts once the deadline passes (`metadata["deadline_stopped_recovery"]` stamped). `RAGOrchestrator` passes `started + web_rag_timeout_s` on both web-only and dual paths. Locked by `backend/tests/test_web_rag_deadline.py` (8 tests).
+**Why:** `asyncio.wait_for` + `task.cancel()` does not stop the `asyncio.to_thread` worker — recovery kept running past the timeout, computed a strong result, and had it discarded while the caller already fell back (live-demo phantom success). Proven with a minimal event-loop reproduction before fixing.
+**What it replaced:** Nothing — previously the outer budget was incommunicable (`retrieve()` took no deadline kwarg). Count bound (`MAX_RECOVERY_ROUNDS=2`), thresholds, RRF/BM25/verifier/branches unchanged; timeout still enforced; timed-out WebRAG still falls back safely.
+
+---
+
+### Clerk authentication mandatory on chat/voice/grievance-write endpoints
+**Date:** 2026-10-06 (code state; enforced in `app/auth.py` + route `Depends(require_auth)`)
+**What:** `POST /chat`, `POST /chat/stream` (and grievance-write + voice routes) return `401 {"detail":"Not authenticated"}` without a valid Clerk JWT. The Next.js proxy routes attach `Authorization: Bearer <token>` from `auth().getToken()`. Pre-existing route tests that post without a token fail with 401 — unrelated to retrieval.
+**Why:** Demo requires signed-in users; backend never serves RAG without an authenticated `user_id`.
+
+---
+
+### `BACKEND_API_URL` is the backend base URL (frontend proxy convention)
+**Date:** 2026-10-06
+**What:** `BACKEND_API_URL=http://localhost:8000` (no `/chat` suffix). `/api/chat` proxies to `{base}/chat`, `/api/chat/stream` to `{base}/chat/stream`; both strip a legacy `/chat` or `/chat/stream` suffix so old env values still resolve. 503 from these routes means the backend is unreachable (the response detail now names the target URL); 502 means the backend answered non-OK. Restart `npm run dev` after changing `.env.local`.
+**Why:** A stale `.env.local` pointing at dead port 8001 caused `POST /api/chat/stream` 503 while both servers were "live". The old convention was also inconsistent (chat routes expected a `/chat` suffix, grievance/voice routes expected the base).

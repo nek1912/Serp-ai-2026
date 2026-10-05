@@ -24,7 +24,7 @@ found, the system abstains rather than guessing.
 ```
 User message
   │
-  ├── Language detection (app/language.py)        en/hi/gu/mr/bn/ta
+  ├── Language detection (app/language.py)        en/hi/gu/mr/bn/ta/te/kn/pa/or/ml
   ├── Domain classification (app/domains.py)       AnchorStore: keyword + cosine
   ├── Translation to English (if needed)           Sarvam → Azure fallback
   │
@@ -35,7 +35,7 @@ User message
   │
   └─[all other domains]──► RAGOrchestrator.run()
                             ├── StaticRAGService  (Supabase pgvector)
-                            ├── WebRAGService     (Tavily/Firecrawl 10-step)
+                            ├── WebRAGService     (Tavily/SerpApi-Google/Firecrawl 10-step)
                             ├── EvidenceController (merge + prompt build)
                             ├── LLM generation    (Groq → Gemini fallback)
                             ├── citation_verifier  (invalid → ABSTAIN)
@@ -59,7 +59,9 @@ User message
 | Config + all env vars | `backend/app/config.py` |
 | RAG orchestrator | `backend/app/services/rag_orchestrator.py` |
 | Static RAG (Supabase pgvector hybrid) | `backend/app/services/static_rag.py` |
-| Web RAG (10-step Tavily/Firecrawl) | `backend/app/services/web_rag.py` |
+| Web RAG (10-step Tavily/SerpApi-Google/Firecrawl) | `backend/app/services/web_rag.py` |
+| WebDiscovery recovery + referrals | `backend/app/web_rag/recovery.py`, `referrals.py`, `mandate_map.py`, `validity.py`, `leads.py`, `clusters.py`, `diversity.py`, `facets.py`, `identifiers.py`, `impersonation.py`, `expansion.py`, `lexicon.py`, `status.py` |
+| Clerk auth (mandatory on chat/voice/grievance-write) | `backend/app/auth.py` |
 | Evidence controller + prompt builder | `backend/app/evidence_controller.py` |
 | Evidence gate (abstention thresholds) | `backend/app/evidence_gate.py` |
 | Citation verifier | `backend/app/citation_verifier.py` |
@@ -73,7 +75,7 @@ User message
 | Database schema | `backend/schema.sql` |
 | Frontend (Next.js 16) | `frontend/` |
 | Main chat UI | `frontend/src/components/ChatWindow.tsx` |
-| i18n (6 languages) | `frontend/src/lib/i18n/` |
+| i18n (11 languages) | `frontend/src/lib/i18n/` |
 | Document ingestion | `backend/seed_parser.py`, `backend/ingest_seed.py` |
 
 ---
@@ -93,15 +95,28 @@ User message
 6. **Reranker off by default**: `RERANKER_ENABLED=false`. Enabling it drops
    Recall@1 from 0.85 to 0.50 on current eval set. Do not enable without new
    evidence.
+7. **WebDiscovery concurrency is frozen**: `_search_branches()` × `_search_all()`
+   `ThreadPoolExecutor` fan-out, `MAX_BRANCHES=8`, provider timeout 5s,
+   `web_rag_timeout_s=30.0`. No asyncio inside WebDiscovery, no new executors,
+   no wider pools.
+8. **SerpApi Search Index is rejected** (decision A, 2026-10-05): evaluated
+   against post-Sarvam canonical queries, no full-pipeline rescue demonstrated.
+   Do not integrate it or any new search provider without explicit instruction.
+9. **Cooperative WebRAG deadline** (2026-10-06): `WebRAGService.retrieve()`
+   takes an optional absolute `deadline`; no NEW recovery round starts past it.
+   The orchestrator passes `started + web_rag_timeout_s` on both web paths.
+   Cancelling the asyncio task does NOT stop the `to_thread` worker — never
+   rely on cancellation to bound WebRAG work. Count bound (`MAX_RECOVERY_ROUNDS=2`),
+   thresholds, RRF/BM25/verifier/branches stay untouched.
 
 ---
 
 ## API contract (backend endpoints)
 
 ```
-POST /chat
+POST /chat   (requires Clerk JWT → 401 {"detail":"Not authenticated"} without it)
   Body: { question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }
-  language: "en" | "hi" | "gu" | "mr" | "bn" | "ta"
+  language: "en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"
   Response: { answer, language, domain, intent, entities, confidence,
               confidence_level, citations, abstained, speech_text,
               speech_segments, follow_up_question, mode, conversation_id }
@@ -152,7 +167,18 @@ Optional (voice):
 
 Optional (web RAG):
 - `TAVILY_API_KEY_1`, `TAVILY_API_KEY_2` — web search
+- `SERPAPI_API_KEY_1`, `SERPAPI_API_KEY_2` — SerpApi Google web search
+- `SEARCH_PROVIDERS` — e.g. `tavily,serpapi` (code default: `tavily`)
 - `FIRECRAWL_API_KEY` — web crawl
+- `WEB_RAG_TIMEOUT_S` — outer WebRAG budget, seconds (code default: `30.0`)
+
+Auth (required for chat/voice/grievance-write):
+- `CLERK_SECRET_KEY`, `CLERK_ISSUER` — backend JWT verification
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` — frontend sign-in
+
+Frontend proxy convention:
+- `BACKEND_API_URL` is the backend BASE (e.g. `http://localhost:8000`, no `/chat`
+  suffix). Restart `npm run dev` after changing `.env.local`.
 
 Optional (translation):
 - `AZURE_TRANSLATOR_KEY`, `AZURE_TRANSLATOR_REGION`, `AZURE_TRANSLATOR_ENDPOINT`
