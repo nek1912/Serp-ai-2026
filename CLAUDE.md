@@ -29,7 +29,7 @@ tells you what's actually built and what the current state is. This file
 | Layer | Technology | Notes |
 |---|---|---|
 | Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 | Static SPA in `frontend-react/`. **Not a PWA** — no manifest, no service worker |
-| Frontend API layer | Express 5 BFF in `frontend-react/server/` | Owns the 11 `/api/*` routes and injects the Clerk bearer token. **Never reintroduce route handlers on the client** — `CLERK_SECRET_KEY` cannot reach a browser bundle |
+| Frontend API access | Direct browser → FastAPI | The browser attaches Clerk's session token. `src/lib/backend.ts` owns the URL mapping. Never reintroduce a proxy holding `CLERK_SECRET_KEY` — it is not needed and adds a port to deploy |
 | Backend | FastAPI (Python ≥3.11) on Render Free | `uvicorn app.main:app` |
 | DB + vectors | Supabase Postgres + pgvector (HNSW cosine) | 768d embeddings |
 | Embeddings | Jina Embeddings v3 (primary) | 768d, task-typed |
@@ -64,24 +64,15 @@ GET  /health
 GET  /health/providers
 ```
 
-The frontend never calls FastAPI directly. Every request goes through the
-Express BFF in `frontend-react/server/`, which owns these 11 paths (unchanged
-from the Next.js app, so `src/lib/api.ts` needed no edits):
+The frontend calls FastAPI **directly** from the browser and attaches Clerk's
+own session token as `Authorization: Bearer`. There is no proxy server and no
+second port. `src/lib/backend.ts` owns the base URL, the legacy `/api/*` →
+FastAPI path mapping, and the bearer header; `App.tsx` registers Clerk's
+`useAuth().getToken` there once at mount.
 
-```
-POST /api/chat · POST /api/chat/stream        ← both stream SSE from /chat/stream
-GET  /api/documents/pdf/:filename            ← streams the PDF from FastAPI
-POST /api/grievance/{answer,clarify,detect,finalize}
-GET  /api/grievance/fields
-POST /api/speak · POST /api/voice/speak       ← TTS; /api/speak returns binary mp3
-POST /api/translate                          ← unauthenticated
-```
-
-Nine of the eleven attach a Clerk bearer token minted server-side.
-Status codes are a contract the client branches on: **502** = upstream answered
-non-OK, **503** = upstream unreachable or body unreadable, **413** = request body
-over 1 MB. `proxySse` aborts upstream when the client disconnects or after
-120 s. Clerk middleware is mounted on `/api` only.
+Because requests are cross-origin, `ALLOWED_ORIGINS` in the repo-root `.env`
+must list the frontend's origin. `CLERK_ISSUER` there must match the frontend's
+Clerk instance — if they diverge, every authenticated call 401s.
 
 Chat request: `{ question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }`  
 Language values: `"en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"`
@@ -98,8 +89,8 @@ SSE events: `thinking | step | token | metadata | done | error`
   no bare `except`.
 - Every external provider call goes through an adapter with explicit timeout and
   fallback handling — never call a provider SDK directly from route handlers.
-- Never put API keys in frontend code or commit them. Only `VITE_`-prefixed vars reach the browser bundle; `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` and `BACKEND_API_URL` are read only by `frontend-react/server/`. The BFF refuses to boot without the Clerk keys — that is intentional, fail fast rather than 500 on first request.
-  Backend environment variables only.
+- Never put API keys in frontend code or commit them. Only `VITE_`-prefixed vars reach the browser bundle; `CLERK_SECRET_KEY` is read only by the backend.
+  Backend environment variables only. `CLERK_SECRET_KEY` and `CLERK_ISSUER` stay in the repo-root `.env`; a stale `backend/.env` is ignored with a warning.
 - Structured logs. Never log API keys, auth tokens, or full grievance PII.
 - Write tests for: domain routing, jurisdiction filtering, retrieval, citation
   validity, abstention, grievance workflow, provider fallback.
