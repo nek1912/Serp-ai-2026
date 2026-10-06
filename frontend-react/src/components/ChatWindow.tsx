@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { sendChat, sendChatStream, ChatResponse, type StreamEvent } from "@/lib/api";
 import { useI18n } from "@/lib/i18n/provider";
 import type { Locale } from "@/lib/i18n/i18n";

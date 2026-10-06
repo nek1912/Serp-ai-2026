@@ -1,6 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useI18n } from "@/lib/i18n/provider";
 import { getLegalDoc, getLegalDocs } from "@/lib/data";
 import { Card } from "@/components/ui/Card";

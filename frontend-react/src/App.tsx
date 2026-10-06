@@ -30,6 +30,11 @@ export default function App() {
       <BrowserRouter>
         <LanguageProvider>
           <ConditionalNavs>
+            {/* Preserved from app/layout.tsx:94. Targets <main id="content">
+                in ConditionalNavs; .skip-link is defined in globals.css. */}
+            <a href="#content" className="skip-link">
+              Skip to content
+            </a>
             <Routes>
               {/* Static segments before dynamic ones. */}
               <Route path="/" element={<HomePage />} />

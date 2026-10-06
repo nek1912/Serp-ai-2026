@@ -1,6 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useI18n } from "@/lib/i18n/provider";
 import { getService, getServices } from "@/lib/data";
 import { Reveal } from "@/components/motion/Reveal";

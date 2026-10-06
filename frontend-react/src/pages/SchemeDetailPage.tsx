@@ -1,5 +1,4 @@
-import { Link } from "react-router-dom";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useI18n } from "@/lib/i18n/provider";
 import { getScheme } from "@/lib/data";
 import { Button } from "@/components/ui/Button";

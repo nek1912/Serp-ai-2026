@@ -1,5 +1,4 @@
-import { Link } from "react-router-dom";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef } from "react";
 import { useAuth, UserButton } from "@clerk/react";
 import { useI18n } from "@/lib/i18n/provider";
