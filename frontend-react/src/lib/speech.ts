@@ -169,6 +169,7 @@ function playBackendAudio(
 
 async function speakBackendSegments(
   segments: SpeechSegment[],
+  token: number,
 ): Promise<void> {
   const response = await fetchVoiceSpeak(segments);
 
@@ -176,7 +177,16 @@ async function speakBackendSegments(
     throw new Error("Backend TTS returned empty audio");
   }
 
-  const token = _speakToken;
+  /*
+   * Bail out BEFORE creating the Audio element.
+   *
+   * Reading the module-level _speakToken here (instead of using the caller's
+   * token) means a call cancelled while the fetch was in flight re-read the NEW
+   * token, passed the staleness guard in playBackendAudio, created an Audio
+   * element, and then waited forever for an onended that never fires — leaking
+   * the element and leaving the caller's promise pending for good.
+   */
+  if (token !== _speakToken) return;
 
   await playBackendAudio(response.audio, token);
 }
@@ -208,7 +218,7 @@ export async function speakSegments(
   try {
     if (token !== _speakToken) return;
 
-    await speakBackendSegments(runs);
+    await speakBackendSegments(runs, token);
 
     if (token !== _speakToken) return;
 

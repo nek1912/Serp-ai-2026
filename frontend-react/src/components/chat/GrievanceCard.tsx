@@ -36,6 +36,40 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Field keys arrive from the grievance backend as snake_case. Turn them into
+ * human-readable English labels.
+ *
+ * Initialisms must stay uppercase ("application_id" -> "Application ID"). A naive
+ * title-caser produces "Application Id", which reads as a typo to a citizen
+ * filling in a government form, so the initialism set is explicit rather than
+ * guessed.
+ */
+const FIELD_INITIALISMS = new Set([
+  "id",
+  "url",
+  "upi",
+  "ifsc",
+  "pan",
+  "kcc",
+  "aadhaar",
+  "gst",
+  "pin",
+  "sms",
+]);
+
+function humanizeFieldKey(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (FIELD_INITIALISMS.has(lower)) return lower.toUpperCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
   if (!value) return null;
   return (
@@ -189,7 +223,7 @@ export function GrievanceCard({ grievance }: { grievance: Grievance }) {
               const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
               const i18nKey = `field.${camelKey}`;
               const translated = t(i18nKey as Parameters<typeof t>[0]);
-              const label = translated !== i18nKey ? translated : key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+              const label = translated !== i18nKey ? translated : humanizeFieldKey(key);
               return (
                 <Field
                   key={key}
