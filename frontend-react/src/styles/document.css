@@ -1,0 +1,10 @@
+/* Replaces the className on <body> from app/layout.tsx:93, which cannot be
+   expressed in JSX because Vite renders into #root rather than owning <body>. */
+body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-primary);
+  background-color: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+}

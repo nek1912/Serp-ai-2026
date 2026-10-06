@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import type { Grievance } from "@/lib/api";
 import { useI18n } from "@/lib/i18n/provider";
 import {
@@ -48,7 +48,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 
 export function GrievanceCard({ grievance }: { grievance: Grievance }) {
   const { t } = useI18n();
-  const router = useRouter();
+  const router = useNavigate();
   const [showEnglishDraft, setShowEnglishDraft] = useState(false);
 
   const location = grievance.location;
@@ -149,7 +149,7 @@ export function GrievanceCard({ grievance }: { grievance: Grievance }) {
                       // sessionStorage unavailable (private mode, etc.) — the
                       // draft page will show its own empty-state in that case.
                     }
-                    router.push("/grievance/draft/view");
+                    router("/grievance/draft/view");
                   }}
                   className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent-primary)] underline decoration-dotted hover:opacity-80"
                 >

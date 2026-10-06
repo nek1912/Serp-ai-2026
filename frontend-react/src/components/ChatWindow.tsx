@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import Link from "next/link";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { sendChat, sendChatStream, ChatResponse, type StreamEvent } from "@/lib/api";
 import { useI18n } from "@/lib/i18n/provider";
 import type { Locale } from "@/lib/i18n/i18n";
@@ -112,11 +112,11 @@ function fallback(lang: Locale): ChatResponse {
 }
 
 export function ChatWindow() {
-  const router = useRouter();
+  const router = useNavigate();
   const { t, locale } = useI18n();
   const speech = useMemo(() => createSpeechService(), []);
   const [speechReady, setSpeechReady] = useState(false);
-  const sp = useSearchParams();
+  const [sp] = useSearchParams();
   const [micSupported, setMicSupported] = useState(false);
   useEffect(() => setMicSupported(speech.supported), [speech]);
   const [hydrated, setHydrated] = useState(false);
@@ -452,9 +452,9 @@ export function ChatWindow() {
 
   function handleBack() {
     if (window.history.length > 1) {
-      router.back();
+      router(-1);
     } else {
-      router.push("/");
+      router("/");
     }
   }
 
@@ -571,7 +571,7 @@ export function ChatWindow() {
           {/* Footer User Profile */}
           <div className="mt-auto pt-2">
             <Link
-              href="/"
+              to="/"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--on-primary)] shadow-xs transition-transform hover:scale-105"
               title={t("chat.home")}
             >
