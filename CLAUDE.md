@@ -64,12 +64,31 @@ GET  /health
 GET  /health/providers
 ```
 
+The frontend never calls FastAPI directly. Every request goes through the
+Express BFF in `frontend-react/server/`, which owns these 11 paths (unchanged
+from the Next.js app, so `src/lib/api.ts` needed no edits):
+
+```
+POST /api/chat · POST /api/chat/stream        ← both stream SSE from /chat/stream
+GET  /api/documents/pdf/:filename            ← streams the PDF from FastAPI
+POST /api/grievance/{answer,clarify,detect,finalize}
+GET  /api/grievance/fields
+POST /api/speak · POST /api/voice/speak       ← TTS; /api/speak returns binary mp3
+POST /api/translate                          ← unauthenticated
+```
+
+Nine of the eleven attach a Clerk bearer token minted server-side.
+Status codes are a contract the client branches on: **502** = upstream answered
+non-OK, **503** = upstream unreachable or body unreadable, **413** = request body
+over 1 MB. `proxySse` aborts upstream when the client disconnects or after
+120 s. Clerk middleware is mounted on `/api` only.
+
 Chat request: `{ question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }`  
-Language values: `"en" | "hi" | "gu" | "mr" | "bn" | "ta"`
+Language values: `"en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"`
 
 Chat response: `{ answer, language, domain, intent, entities, confidence, confidence_level, citations, abstained, speech_text, speech_segments, follow_up_question, mode, conversation_id }`
 
-SSE events: `thinking | token | metadata | done`
+SSE events: `thinking | step | token | metadata | done | error`
 
 ---
 
@@ -79,7 +98,7 @@ SSE events: `thinking | token | metadata | done`
   no bare `except`.
 - Every external provider call goes through an adapter with explicit timeout and
   fallback handling — never call a provider SDK directly from route handlers.
-- Never put API keys in frontend code, commit them, or expose via `VITE_*`. `CLERK_SECRET_KEY` and `BACKEND_API_URL` are read only by `frontend-react/server/`.
+- Never put API keys in frontend code or commit them. Only `VITE_`-prefixed vars reach the browser bundle; `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` and `BACKEND_API_URL` are read only by `frontend-react/server/`. The BFF refuses to boot without the Clerk keys — that is intentional, fail fast rather than 500 on first request.
   Backend environment variables only.
 - Structured logs. Never log API keys, auth tokens, or full grievance PII.
 - Write tests for: domain routing, jurisdiction filtering, retrieval, citation

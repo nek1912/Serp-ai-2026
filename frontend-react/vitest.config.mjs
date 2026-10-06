@@ -13,5 +13,13 @@ export default defineConfig({
       "src/**/*.{test,spec}.{ts,tsx}",
       "server/**/*.{test,spec}.js",
     ],
+    env: {
+      // server/clerk.js fails fast at import time when Clerk is unconfigured,
+      // which is the desired behaviour for a real deploy. Tests need harmless
+      // placeholders so importing the BFF succeeds.
+      CLERK_PUBLISHABLE_KEY: "pk_test_vitest",
+      CLERK_SECRET_KEY: "sk_test_vitest",
+      BACKEND_API_URL: "http://localhost:8000",
+    },
   },
 });

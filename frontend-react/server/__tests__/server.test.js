@@ -542,3 +542,131 @@ describe("Clerk middleware scoping", () => {
     expect(res.status).toBe(200);
   });
 });
+/*
+ * Regression guards for defects found in the final whole-branch review.
+ * Each of these was a live bug, not a hypothetical.
+ */
+
+/*
+ * I-1: BACKEND_API_URL is an ORIGIN, but streamUrl() carried over the Next
+ * handler's `replace(/\/chat$/, "/chat/stream")`. Against an origin that regex
+ * never matches, the `||` fallback never fires (an origin is truthy), and the
+ * result was the bare origin -- so chat POSTed to "/" and every message 502'd
+ * with "backend responded 404". The existing suite missed it because it never
+ * set BACKEND_API_URL, so every test took the fallback branch.
+ */
+describe("streaming chat URL construction", () => {
+  it("appends /chat/stream to an origin-style BACKEND_API_URL", async () => {
+    const original = process.env.BACKEND_API_URL;
+    process.env.BACKEND_API_URL = "http://example.test";
+    try {
+      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("data: ok\n\n", {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      );
+      const s = createApp().listen(0);
+      await new Promise((r) => s.once("listening", r));
+      try {
+        await realFetch(`http://127.0.0.1:${s.address().port}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: "hi" }),
+        });
+        expect(String(spy.mock.calls[0][0])).toBe("http://example.test/chat/stream");
+      } finally {
+        s.close();
+      }
+    } finally {
+      if (original === undefined) delete process.env.BACKEND_API_URL;
+      else process.env.BACKEND_API_URL = original;
+    }
+  });
+
+  it("does not leave a trailing-slash double slash", async () => {
+    const original = process.env.BACKEND_API_URL;
+    process.env.BACKEND_API_URL = "http://example.test///";
+    try {
+      const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("data: ok\n\n", {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      );
+      const s = createApp().listen(0);
+      await new Promise((r) => s.once("listening", r));
+      try {
+        await realFetch(`http://127.0.0.1:${s.address().port}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: "hi" }),
+        });
+        expect(String(spy.mock.calls[0][0])).toBe("http://example.test/chat/stream");
+      } finally {
+        s.close();
+      }
+    } finally {
+      if (original === undefined) delete process.env.BACKEND_API_URL;
+      else process.env.BACKEND_API_URL = original;
+    }
+  });
+});
+
+/*
+ * C-2: there was no Express error handler, so any unhandled throw fell through
+ * to Express's default, which serialises err.stack -- absolute filesystem paths
+ * and dependency internals -- into an HTML body served to any caller who can
+ * reach /api. The frontend expects JSON here.
+ */
+describe("error handling", () => {
+  it("returns JSON, never a stack trace, for an unhandled route error", async () => {
+    const s = createApp().listen(0);
+    await new Promise((r) => s.once("listening", r));
+    try {
+      // Force a throw inside a route: a 200 whose body explodes when read.
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Object.defineProperty(new Response(null, { status: 200 }), "arrayBuffer", {
+          value: () => Promise.reject(new Error("boom-secret-path")),
+        }),
+      );
+      const res = await realFetch(
+        `http://127.0.0.1:${s.address().port}/api/documents/pdf/x.pdf`,
+      );
+      const body = await res.text();
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(body).not.toContain("boom-secret-path");
+      expect(body).not.toContain("node_modules");
+      expect(JSON.parse(body).error).toBeTruthy();
+    } finally {
+      s.close();
+    }
+  });
+});
+
+/*
+ * M-2: readJson/readRawBody replaced the framework's req.json()/req.formData(),
+ * which owned their buffering limits. Uncapped, one unauthenticated oversized
+ * POST to /api/speak OOMs the single process that serves both the API and the
+ * SPA.
+ */
+describe("request body limits", () => {
+  it("rejects an oversized JSON body with 413", async () => {
+    const huge = "x".repeat(1_200_000);
+    const res = await realFetch(`${base}/api/grievance/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blob: huge }),
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe("body_too_large");
+  });
+
+  it("still accepts a normal-sized body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: 1 }), { status: 200 }),
+    );
+    const res = await json("/api/grievance/answer", { conversation_id: "c1" });
+    expect(res.status).toBe(200);
+  });
+});

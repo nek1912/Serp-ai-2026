@@ -27,6 +27,7 @@ cp .env.example .env    # then fill in the four values
 | `VITE_CLERK_PUBLISHABLE_KEY` | browser | Clerk session in the browser |
 | `VITE_CLERK_SIGN_IN_URL` | browser | Sign-in redirect target |
 | `VITE_CLERK_SIGN_UP_URL` | browser | Sign-up redirect target |
+| `CLERK_PUBLISHABLE_KEY` | **server only** | Read by `@clerk/express` at runtime. May be named `VITE_CLERK_PUBLISHABLE_KEY` instead, but the server reads the conventional name first |
 | `CLERK_SECRET_KEY` | **server only** | Mints the bearer token forwarded to FastAPI |
 | `BACKEND_API_URL` | **server only** | Python backend base URL |
 

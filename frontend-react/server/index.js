@@ -13,23 +13,23 @@ import {
   hexToBuffer,
   readUpstreamJson,
   readUpstreamBuffer,
+  readBody,
   BODY_UNREADABLE,
 } from "./proxy.js";
 import { proxySse } from "./sse.js";
 
 /**
- * Both /api/chat and /api/chat/stream resolve to the streaming endpoint.
+ * The streaming chat endpoint on the Python backend.
  *
- * Ported from the Next handler's
- *   process.env.BACKEND_API_URL?.replace(/\/chat$/, "/chat/stream")
- *     || "http://localhost:8000/chat/stream"
- * so the returned value is an absolute URL: proxySse passes it straight to
- * fetch() rather than re-prefixing BACKEND(), which would otherwise yield
- * "http://localhost:8000http://localhost:8000".
+ * BACKEND_API_URL is an ORIGIN (see proxy.js's BACKEND() and .env.example), so
+ * the path is appended here. The Next handler rewrote a trailing "/chat" in the
+ * variable because it used to hold a full endpoint; carrying that rewrite over
+ * meant the regex never matched an origin, the `||` fallback never fired
+ * because the origin is truthy, and the result was the bare origin -- so chat
+ * POSTed to "/" and every message 502'd with "backend responded 404".
+ * Always append; never rewrite.
  */
-const streamUrl = () =>
-  process.env.BACKEND_API_URL?.replace(/\/+$/, "").replace(/\/chat$/, "/chat/stream") ||
-  `${BACKEND()}/chat/stream`;
+const streamUrl = () => `${BACKEND()}/chat/stream`;
 
 export function createApp() {
   const app = express();
@@ -296,17 +296,40 @@ export function createApp() {
     });
   }
 
+  /*
+   * Terminal error handler. Registered last so it catches anything thrown by a
+   * route body that its own try/catch did not already handle.
+   *
+   * Without this, Express falls back to its default handler, which serialises
+   * err.stack into an HTML body -- absolute filesystem paths, dependency
+   * versions and internal module names handed to any caller who can reach
+   * /api/*. It also means the frontend sees HTML where it expects JSON, so
+   * sendChatStream's r.json() surfaces an opaque SyntaxError instead of a clean
+   * failure.
+   */
+  app.use((err, _req, res, _next) => {
+    console.error(
+      { err: err?.message, stack: err?.stack },
+      "[bff] unhandled route error",
+    );
+    if (res.headersSent) {
+      // The stream already started; the status line is long gone.
+      return res.end();
+    }
+    res.status(err?.status ?? 500).json({ error: "internal_error" });
+  });
+
   return app;
 }
 
 // ── Multipart helpers (no external dependency) ─────────────────────────
+/*
+ * Shares the capped reader from proxy.js so /api/speak is bounded exactly like
+ * the JSON routes. This handler is reachable unauthenticated, so an unbounded
+ * buffer here would be a one-request OOM of the whole process.
+ */
 function readRawBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
+  return readBody(req);
 }
 
 function parseMultipart(buffer, contentType) {

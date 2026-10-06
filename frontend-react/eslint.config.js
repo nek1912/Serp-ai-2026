@@ -17,6 +17,11 @@ export default tseslint.config(
       sourceType: "module",
       globals: { ...globals.node },
     },
+    rules: {
+      // Express identifies an error handler by its arity, so the 4th parameter
+      // must be declared even though it is never called.
+      "no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrors: "none" }],
+    },
   },
   {
     files: ["**/*.{ts,tsx}"],
