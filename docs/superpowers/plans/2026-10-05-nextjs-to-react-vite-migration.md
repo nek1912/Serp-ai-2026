@@ -1726,7 +1726,34 @@ foreach ($f in $files) {
 }
 ```
 
-`<Link href className>` is API-identical between the two, so no JSX changes.
+**The `href` prop does NOT carry over.** React Router's `<Link>` takes `to`, not
+`href`. Every JSX usage must change from `<Link href="/x">` to `<Link to="/x">`,
+or the link renders but never navigates. This is the single highest-risk item in
+the whole migration — a missed conversion breaks navigation silently, with no
+type error and no build failure.
+
+```powershell
+$files = Get-ChildItem -LiteralPath "frontend-react\src" -Recurse -Include *.tsx -File
+foreach ($f in $files) {
+  $c = [System.IO.File]::ReadAllText($f.FullName)
+  if ($c -match 'from "next/link"') {
+    $c = $c -replace 'import Link from "next/link";', 'import { Link } from "react-router-dom";'
+    # href= -> to= only on <Link ...> opening tags
+    $c = [regex]::Replace($c, '(<Link\b[^>]*?)\bhref=', '$1to=')
+    [System.IO.File]::WriteAllText($f.FullName, $c)
+    "link: $($f.Name)"
+  }
+}
+```
+
+Then verify none remain:
+
+```powershell
+Select-String -Path (Get-ChildItem -LiteralPath "frontend-react\src" -Recurse -Include *.tsx -File).FullName -Pattern "<Link[^>]*href="
+```
+
+Expected: no output. Also confirm `<a href=` usages were left alone — those are
+external links and plain anchors and must keep `href`.
 
 - [ ] **Step 5: Replace `next/navigation` in the 7 files**
 
@@ -2040,13 +2067,23 @@ import "./styles/document.css";
 
 ```powershell
 Set-Location "A:\Serp-ai-2026\frontend-react"
-Select-String -Path "src\**\*.tsx","src\**\*.ts","server\**\*.js","*.ts","*.js" `
+# NOTE: PowerShell's -Path does not treat ** as "recurse across directories".
+# Using "src\**\*.tsx" matches only some files and silently misses others.
+# Always enumerate files first, then search them.
+$files = Get-ChildItem -LiteralPath "src" -Recurse -Include *.ts,*.tsx -File
+$files += Get-ChildItem -LiteralPath "server" -Recurse -Include *.js -File
+$files += Get-ChildItem -LiteralPath "." -Include *.ts,*.js -File
+Select-String -LiteralPath $files.FullName `
   -Pattern "next/link|next/navigation|next/server|next/font|NextResponse|@clerk/nextjs|style jsx|:global"
 ```
 
 Expected: no output. Any hit is a missed replacement — fix it before committing.
 Note `style jsx` and `:global` are in this list because styled-jsx is a
 Next-compiler feature with no plain-React equivalent (Step 5b).
+
+Test files under `src/**/__tests__/` are in scope for this grep. The three
+component tests that mock `next/navigation` and `next/link` are fixed in Task 6,
+so run this grep again after Task 6 and expect it clean then.
 
 - [ ] **Step 11: Build**
 
