@@ -26,6 +26,10 @@ PRE_RANK_TOP_K = 15
 FINAL_TOP_K = 8
 MAX_TEXT_CHARS = 1800
 
+# google-genai rejects manually-set deadlines below 10s with
+# 400 INVALID_ARGUMENT ("Minimum allowed deadline is 10s").
+GEMINI_MIN_DEADLINE_S = 10.0
+
 
 class GeminiReranker:
 
@@ -43,7 +47,9 @@ class GeminiReranker:
         else:
             self._enabled = True
             self.model = getattr(settings, "grievance_gemini_model", settings.gemini_model)
-            self._timeout_s = float(settings.gemini_reranker_timeout_s)
+            # Clamp to the API minimum so an explicit env override below 10s
+            # cannot reintroduce the 400 INVALID_ARGUMENT failure.
+            self._timeout_s = max(GEMINI_MIN_DEADLINE_S, float(settings.gemini_reranker_timeout_s))
             self.client = genai.Client(
                 api_key=self._api_key,
                 http_options=types.HttpOptions(timeout=int(self._timeout_s * 1000)),

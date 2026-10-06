@@ -118,3 +118,43 @@ def test_build_curated_prompt_separates_evidence():
     assert "[STATIC]" in user
     assert "DYNAMIC EVIDENCE" in user
     assert "rural areas" in system
+
+
+# ---------------------------------------------------------------------------
+# Prompt focus: guidance must never inject evidence-absent offices/schemes
+# (live farmer-registry answer contained an unsupported "PACS office" claim
+# because rules 8/9 named specific offices unconditionally).
+# ---------------------------------------------------------------------------
+
+
+def _curated_prompts():
+    from app.contracts import EvidenceBundle, StaticEvidence, DynamicEvidence
+    from app.evidence_controller import EvidenceController
+    controller = EvidenceController()
+    bundle = EvidenceBundle(
+        static=StaticEvidence(available=False, chunks=[], summary="none"),
+        dynamic=DynamicEvidence(available=False, chunks=[], reason="No web results"),
+        query_requirements=QueryRequirements(temporal_scope="current", geographic_scope="state", required_specificity="state", requires_dynamic=True),
+        query="farmer registry",
+    )
+    return controller.build_curated_prompt(bundle, "farmer registry", None, "gu")
+
+
+def test_prompt_does_not_instruct_specific_office_guidance():
+    system, user = _curated_prompts()
+    combined = " ".join((system + "\n" + user).split())
+    # Old unconditional directives must be gone (the "[PACS office / ...]"
+    # bracket alternatives and "visit your ..." instructions). A mention of
+    # "PACS office" solely as a prohibited example is expected.
+    assert "[PACS office" not in combined
+    assert "visit your local" not in combined
+    assert "visit your nearest" not in combined
+    assert "call [relevant helpline]" not in combined
+
+
+def test_prompt_bounds_guidance_to_evidence():
+    system, user = _curated_prompts()
+    combined = " ".join((system + "\n" + user).split())
+    assert "never introduce a specific office" in combined
+    assert "does not appear in the evidence" in combined
+    assert "concerned government office" in combined

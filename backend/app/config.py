@@ -125,7 +125,9 @@ class Settings(BaseSettings):
     answer_grounding_llm_enabled: bool = False  # Enable LLM verification layer
 
     # Web RAG latency budgets
-    gemini_reranker_timeout_s: float = 8.0
+    # NOTE: google-genai rejects manually-set deadlines below 10s with
+    # 400 INVALID_ARGUMENT, so this default must stay >= 10.0.
+    gemini_reranker_timeout_s: float = 10.0
     jina_reranker_timeout_s: float = 5.0
     web_rag_timeout_s: float = 30.0
 

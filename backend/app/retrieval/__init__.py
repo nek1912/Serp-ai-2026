@@ -31,21 +31,16 @@ class GateResult(BaseModel):
 
 def retrieve(supabase, query_embedding: list[float], domain: str,
              state: str | None, k: int = 6,
-             as_of_date: str | None = None) -> list[RetrievedChunk]:
+             as_of_date: str | None = None,
+             match_entity_id: str | None = None) -> list[RetrievedChunk]:
+    # Always send the full 6-key param set so PostgREST unambiguously
+    # selects the 6-arg match_chunks overload on DBs that also carry the
+    # legacy 4-arg overload (4-key calls fail with 300/PGRST203 there).
+    # Null extras mean "no filtering", i.e. legacy-equivalent behavior.
     params = {
         "query_embedding": query_embedding, "match_domain": domain,
         "match_state": state, "match_count": k,
-        # Always send these, even when None.
-        #
-        # The database has two overloaded match_chunks signatures: a 4-arg one
-        # and a 6-arg one that adds these two. PostgREST cannot disambiguate
-        # overloads whose leading parameters are identical (PGRST203, "Could not
-        # choose the best candidate function"), so a 4-arg call fails outright
-        # and static retrieval returns nothing — which surfaces to the citizen
-        # as a confident abstention with no visible cause. Naming all six
-        # parameters resolves to exactly one candidate.
-        "as_of_date": as_of_date,
-        "match_entity_id": None,
+        "as_of_date": as_of_date, "match_entity_id": match_entity_id,
     }
     rows = supabase.rpc("match_chunks", params).execute().data or []
     return [RetrievedChunk(

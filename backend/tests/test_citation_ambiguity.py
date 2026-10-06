@@ -8,6 +8,7 @@ Verifies that verify_citation_ids handles three cases:
 
 
 from app.citation_verifier import (
+    short_citation_id,
     verify_citation_ids,
     verify_citations,
 )
@@ -166,3 +167,48 @@ class TestAmbiguousCitationIntegration:
         result = verify_citations(answer, evidence)
         assert result.is_valid is True
         assert len(result.valid_citations) == 1
+
+
+# ---------------------------------------------------------------------------
+# Full web-ID disambiguation (live B7: same-URL chunks share the 12-hex stem;
+# the old 8-char truncation made every such marker ambiguous → abstain).
+# ---------------------------------------------------------------------------
+
+class TestShortCitationId:
+    def test_web_id_kept_whole(self):
+        assert short_citation_id("web_89df1181cdaf_c2701") == "web_89df1181cdaf_c2701"
+
+    def test_uuid_id_truncated(self):
+        assert short_citation_id("a0eebc99-1111-2222-3333-444444444444") == "a0eebc99"
+
+
+class TestWebFullIdDisambiguation:
+    """A full web marker resolves to exactly one chunk even with same-stem siblings."""
+
+    EVIDENCE = [
+        "web_89df1181cdaf_c2701",
+        "web_89df1181cdaf_c2702",
+    ]
+
+    def test_full_web_id_resolves_despite_shared_stem(self):
+        answer = "Register [chunk:web_89df1181cdaf_c2701] now."
+        valid, invalid = verify_citation_ids(answer, self.EVIDENCE)
+        assert valid == ["web_89df1181cdaf_c2701"]
+        assert invalid == []
+
+    def test_truncated_web_id_still_ambiguous(self):
+        """Old-style truncated markers stay invalid (never silently resolved)."""
+        answer = "Register [chunk:web_89df] now."
+        valid, invalid = verify_citation_ids(answer, self.EVIDENCE)
+        assert valid == []
+        assert invalid == ["web_89df"]
+
+    def test_full_web_id_passes_verification(self):
+        answer = "Register [chunk:web_89df1181cdaf_c2701] now."
+        result = verify_citations(answer, self.EVIDENCE)
+        assert result.is_valid is True
+
+    def test_hallucinated_full_web_id_still_fails(self):
+        answer = "Register [chunk:web_deadbeefcafe_c99] now."
+        result = verify_citations(answer, self.EVIDENCE)
+        assert result.is_valid is False

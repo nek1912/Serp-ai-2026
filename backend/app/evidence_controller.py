@@ -16,6 +16,7 @@ from app.contracts import (
     SourceRole,
     StaticEvidence,
 )
+from app.citation_verifier import short_citation_id
 from app.config import MAX_CHARS_PER_CHUNK
 
 logger = logging.getLogger(__name__)
@@ -313,17 +314,21 @@ CRITICAL RULES:
 
 8. WHEN EVIDENCE IS LIMITED: You can still be helpful!
    - Answer what the evidence supports
-   - Add a brief, friendly note: "For more details, you can visit your
-     local [PACS office / block development office / district cooperative
-     office] or call the helpline."
+   - If you suggest where to get more help, name ONLY the office, portal,
+     or helpline that appears in the evidence (e.g. "the portal mentioned
+     above"). If the evidence names none, say only "the concerned
+     government office" — never introduce a specific office, scheme,
+     helpline number, or organization (such as a PACS office) that does
+     not appear in the evidence.
    - Do NOT give a one-line answer and stop. Provide what you know,
      then guide them to the right place for the rest.
 
 9. WHEN NO EVIDENCE IS FOUND: Be honest but helpful:
    - Explain that you could not find specific information about this
-   - Suggest where they can get help: "Please visit your nearest
-     [PACS office / block development office] or call [relevant helpline].
-     They will be able to help you with the latest information."
+   - Suggest only "your nearest concerned government office" without naming
+     any specific office, scheme, or helpline — never invent a specific
+     office (such as a PACS office), helpline number, or procedure.
+     They will be able to help you with the latest information.
    - Do NOT simply say "I cannot help" — always suggest a next step.
 
 10. Citations: After each factual statement from evidence, add [chunk:ID]
@@ -563,11 +568,13 @@ class EvidenceController:
         static_section = "\n\n---\n\n".join(static_parts) if static_parts else "No static evidence available."
 
         # Build dynamic evidence section (cap to top 3)
+        # Web IDs keep their full stable form so identical-URL chunks stay
+        # distinguishable in citations (8-char truncation collides).
         if bundle.dynamic.available:
             dynamic_parts: list[str] = []
             dynamic_chunks = bundle.dynamic.chunks[:3]
             for chunk in dynamic_chunks:
-                short_id = chunk.chunk_id[:8]
+                short_id = short_citation_id(chunk.chunk_id)
                 content = chunk.content[:MAX_CHARS_PER_CHUNK] if len(chunk.content) > MAX_CHARS_PER_CHUNK else chunk.content
                 dynamic_parts.append(
                     f"[DYNAMIC] [chunk:{short_id}] ({chunk.title} — web — {chunk.url})\n{content}"
@@ -637,7 +644,7 @@ class EvidenceController:
             f"   f) End with the follow-up question (rule 9).\n"
             f"7. Preserve the requested language and script throughout the answer. Translate explanatory text, but keep official scheme names, legal names, acronyms, section numbers, dates, amounts, and citation markers unchanged.\n"
             f"8. Use real-life scenarios and examples in your explanation. Instead of abstract descriptions, say things like 'If you are a farmer with 2 hectares...' or 'Say you took a loan of ₹50,000...' or 'Suppose your crop was damaged by unseasonal rain...' This makes the answer feel like advice from a knowledgeable neighbor.\n"
-            f"9. End your answer with exactly ONE scenario-based follow-up question in {lang_name}. This should be a specific, realistic next question the user might ask based on their situation. Prefix it with 💬. Example: 💬 If you want to know what documents to bring to the PACS office, I can help you prepare a list.\n"
+            f"9. End your answer with exactly ONE scenario-based follow-up question in {lang_name}. This should be a specific, realistic next question the user might ask based on their situation and the evidence above — never name an office, scheme, or helpline that does not appear in the evidence. Prefix it with 💬. Example: 💬 If you need help with the next step described above, tell me which part to explain in more detail.\n"
             f"10. NEVER output HTML tags like <br>, <b>, <i>, <p>. NEVER use --- horizontal rules. NEVER use ## or ### heading markers. Use **bold** for sub-headings and blank lines to separate sections.\n"
             f"{enum_instruction}"
         )
