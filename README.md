@@ -1,8 +1,9 @@
 # JanSahay — Multilingual Cooperative Governance & Legal Assistance Chatbot
 
 Evidence-grounded, multilingual (English + Hindi + Gujarati + Marathi + Bengali + Tamil + Telugu + Kannada + Punjabi + Odia + Malayalam)
-citizen-assistance PWA for cooperative governance, legal guidance, schemes, PMFBY,
-financial literacy, and grievance redressal.
+citizen-assistance SPA for cooperative governance, legal guidance, schemes, PMFBY,
+financial literacy, and grievance redressal. (Static single-page app — not a PWA:
+no manifest, no service worker.)
 
 > **Core principle:** the LLM is **never** the source of truth. Every factual
 > answer must be grounded in retrieved official documents with verifiable
@@ -23,24 +24,24 @@ financial literacy, and grievance redressal.
   full multilingual localization (system text translated; user values preserved)
   (`is_official_submission: false` — no real government integration)
 - Voice input/output via Sarvam AI (Indic language support)
-- Responsive PWA (desktop + mobile)
+- Responsive static SPA (desktop + mobile); browser calls FastAPI directly, no proxy server
 
 ---
 
 ## Architecture
 
 ```
-Next.js PWA ──▶ FastAPI API ──▶ Domain Router (keyword + anchor + LLM)
-                                       │
-                                        ├─▶ Hybrid retrieval (dense pgvector + lexical)
-                                        │       └─▶ optional reranker (wired, OFF by default)
-                                        ├─▶ Web discovery (Tavily + SerpApi Google, bounded concurrent branches)
-                                       ├─▶ Evidence gate (abstention if no citation)
-                                       ├─▶ Citation verifier
-                                       └─▶ Grounded LLM (Groq primary, Gemini fallback)
-                                                └─▶ Answer / abstain + citations + confidence
-                                       ▼
-                                  Supabase Postgres + pgvector (HNSW)
+React+Vite SPA ──▶ FastAPI API ──▶ Domain Router (keyword + anchor + LLM)
+  (browser attaches        │
+   Clerk JWT directly)      ├─▶ Hybrid retrieval (dense pgvector + lexical)
+                           │       └─▶ optional reranker (wired, OFF by default)
+                           ├─▶ Web discovery (Tavily + SerpApi Google, bounded concurrent branches)
+                           ├─▶ Evidence gate (abstention if no citation)
+                           ├─▶ Citation verifier
+                           └─▶ Grounded LLM (Groq primary, Gemini fallback)
+                                        └─▶ Answer / abstain + citations + confidence
+                                        ▼
+                                   Supabase Postgres + pgvector (HNSW)
 ```
 
 The evidence gate runs **before** the LLM: the model can never upgrade a
@@ -52,7 +53,7 @@ low-confidence or uncited result into an answer.
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 16 + React 19 + Tailwind CSS 4, PWA |
+| Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 (static SPA, not a PWA) |
 | Backend | FastAPI (Python 3.11+) |
 | Database | Supabase Postgres + pgvector (HNSW cosine index) |
 | Embeddings | Jina Embeddings v3 (`jina-embeddings-v3`), 768d |
@@ -113,33 +114,30 @@ backend/
   seed_parser.py           MinerU content_list_v2.json → canonical chunk JSONL
   ingest_seed.py           Jina-v3 embed + insert into Supabase
   schema.sql               Full Supabase schema (documents, chunks, sessions, grievance_states)
-  tests/                   pytest test suite
+  tests/                   pytest test suite (incl. eval_rag_v3.py retrieval eval)
 
 frontend/
-  src/app/
-    page.tsx               Landing page (hero, stats, coverage, how it works)
-    chat/                  Chat page
-    grievance/             Grievance intake page
-    schemes/               Schemes browser
-    services/              Services browser
-    library/               Document library
-    faq/                   FAQ page
-    legal/                 Legal info page
-  src/components/
-    ChatWindow.tsx          Main chat UI (SSE streaming, voice, citations)
-    chat/                   Sub-components
-    layout/                 Header, nav
-    ui/                     Button, Badge, Icons, etc.
-  src/lib/
-    api.ts                  Backend API client
-    i18n/                   11-language i18n provider + dictionaries
-    data/                   schemes, services, library data
-    speech.ts               Browser speech recording
+  src/
+    App.tsx                Router + Clerk provider wiring
+    main.tsx               Entry point
+    pages/                 HomePage, ChatPage, GrievancePage, SchemesPage, ServicesPage,
+                           LibraryPage, FaqPage, LegalPage (+ detail pages)
+    components/
+      ChatWindow.tsx        Main chat UI (SSE streaming, voice, citations)
+      chat/                 MessageBubble, GrievanceFlow, panels, cards
+      layout/               Header, nav
+      ui/                   Button, Badge, Icons, etc.
+    lib/
+      backend.ts            FastAPI base URL + legacy /api/* path mapping + bearer header
+      api.ts                Backend API client (via backend.ts)
+      i18n/                 11-language i18n provider + dictionaries
+      speech.ts             Browser speech recording
+  index.html               SPA entry
+  vite.config.ts           Dev server (port 5173, strictPort)
 
 corpus/
   seeds/json_files/        MinerU content_list_v2.json per source (ingestion input)
 
-eval/                       Retrieval eval scripts + gold cases
 workflows/                  Agent workflow loop docs (ingestion, retrieval, database, etc.)
 ```
 
@@ -158,7 +156,8 @@ workflows/                  Agent workflow loop docs (ingestion, retrieval, data
 
 ```bash
 cd backend
-cp ../.env.example .env      # fill in API keys
+# backend/.env is the single source of truth for backend config
+# (absolute path, never CWD-relative)
 pip install -e .
 uvicorn app.main:app --reload
 ```
@@ -168,7 +167,8 @@ uvicorn app.main:app --reload
 ```bash
 cd frontend
 npm install
-npm run dev
+cp .env.example .env   # fill in VITE_ values
+npm run dev            # starts on :5173
 ```
 
 ### Environment Variables
@@ -191,6 +191,11 @@ CLERK_SECRET_KEY=         # Clerk auth (required for /chat, /voice, grievance-wr
 CLERK_ISSUER=             # e.g. https://<instance>.clerk.accounts.dev
 ```
 
+Backend reads ONLY `backend/.env` (absolute path). A repo-root `.env`, if
+present, is ignored with a warning — never split keys across two files.
+Frontend keys are `VITE_*` in `frontend/.env` (`VITE_BACKEND_API_URL` is the
+backend BASE, e.g. `http://localhost:8000`).
+
 ### Database Setup
 
 Apply `backend/schema.sql` to your Supabase project via the SQL editor.
@@ -201,7 +206,10 @@ Tables created:
 - `sessions` — session state (jsonb)
 - `grievance_states` — multi-turn grievance state (full GrievanceState as JSON)
 
-RPC created: `match_chunks(query_embedding, match_domain, match_state, match_count)`
+RPC: `match_chunks(query_embedding, match_domain, match_state, match_count,
+as_of_date)` per `backend/schema.sql` (live DBs additionally carry a 6-arg
+overload with `match_entity_id`; the app always sends all six keys so PostgREST
+unambiguously selects the 6-arg overload — a 4-key call fails with PGRST203)
 
 ### Ingestion (corpus build)
 
@@ -253,15 +261,15 @@ All UI strings translated. Backend responds in the same language as the question
 - Answer generation with Groq primary, Gemini fallback (model names from env)
 - Language-matching: responds in same language as question
 
-### Auth + frontend proxy
+### Auth + frontend access
 - `/chat`, `/chat/stream` (and grievance-write/voice) require a Clerk JWT → `401 {"detail":"Not authenticated"}` without it
-- `BACKEND_API_URL` is the backend BASE (e.g. `http://localhost:8000`); `/api/chat`→`{base}/chat`, `/api/chat/stream`→`{base}/chat/stream`. A 503 means the backend is unreachable; restart `npm run dev` after changing `frontend/.env.local`
+- No proxy server: the browser calls FastAPI directly with Clerk's session token (`frontend/src/lib/backend.ts` owns the base URL, legacy `/api/*` path mapping, and bearer header). `VITE_BACKEND_API_URL` is the backend BASE (e.g. `http://localhost:8000`)
 
 ---
 
 ## Safety
 
-- API keys are server-side only — never in frontend code (`NEXT_PUBLIC_*`).
+- API keys are server-side only — never in frontend code (only `VITE_*` reaches the browser bundle; `CLERK_SECRET_KEY` stays in the backend).
 - Every citation maps to a chunk actually retrieved in that request.
 - Low retrieval confidence / no valid citation forces abstention.
 - Jurisdiction + effective-date metadata on all legal/cooperative answers.

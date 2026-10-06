@@ -2,9 +2,9 @@
 
 ## Product
 
-Multilingual, voice-capable, evidence-grounded citizen-assistance PWA for
-cooperative governance, PMFBY crop insurance, financial inclusion, and grievance
-redressal in India.
+Multilingual, voice-capable, evidence-grounded citizen-assistance SPA (static
+single-page app, not a PWA) for cooperative governance, PMFBY crop insurance,
+financial inclusion, and grievance redressal in India.
 
 The system answers questions strictly from official sources with citations,
 abstains when evidence is insufficient, supports voice interaction (Sarvam AI),
@@ -16,7 +16,7 @@ and provides a prototype grievance intake workflow.
 
 1. Provide trustworthy, cited information about: cooperative law/by-laws, PACS,
    Ministry of Cooperation schemes, PMFBY, financial literacy.
-2. Support 6 languages: English, Hindi, Gujarati, Marathi, Bengali, Tamil (text + voice I/O).
+2. Support 11 languages: English, Hindi, Gujarati, Marathi, Bengali, Tamil, Telugu, Kannada, Punjabi, Odia, Malayalam (text + voice I/O).
 3. Provide 9-stage grievance intake → entity extraction → follow-up → prototype reference → status lookup.
 4. Deploy entirely in the cloud, no personal GPU, zero monetary cost for the demo.
 
@@ -34,13 +34,14 @@ authentication, analytics dashboard, real government grievance submission
 ## Target users
 
 Cooperative members, farmers, and rural stakeholders seeking official guidance
-in English, Hindi, Gujarati, Marathi, Bengali, or Tamil.
+in English, Hindi, Gujarati, Marathi, Bengali, Tamil, Telugu, Kannada, Punjabi,
+Odia, or Malayalam.
 
 ---
 
 ## Core requirements (all implemented)
 
-1. Multilingual text chat (EN, HI, GU, MR, BN, TA).
+1. Multilingual text chat (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML).
 2. Central cooperative info + PACS info + Gujarat state rules. Mandatory metadata
    on every legal/cooperative answer: `jurisdiction, state, effective_date, verified_date`.
 3. PMFBY: FAQ, eligibility guidance, process guidance.
@@ -50,7 +51,7 @@ in English, Hindi, Gujarati, Marathi, Bengali, or Tamil.
 6. Voice: Sarvam AI STT + TTS (primary) → Azure Speech STT (fallback) → text-only.
 7. Domain routing + parallel static & web RAG orchestration + grounded generation.
 8. Citations, confidence, explicit abstention on every factual answer.
-9. Responsive Next.js PWA (desktop + mobile browsers).
+9. Responsive static SPA (React + Vite, desktop + mobile browsers; not a PWA).
 10. Demonstrably deployed in the cloud.
 
 ---
@@ -59,8 +60,8 @@ in English, Hindi, Gujarati, Marathi, Bengali, or Tamil.
 
 ```
 POST /chat
-  Body: { question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }
-  language: "en" | "hi" | "gu" | "mr" | "bn" | "ta"
+  Body: { question, session_id, language, ui_language_explicit?, state?, as_of_date?, history?, mode? }
+  language: "en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"
 
 POST /chat/stream
   Same body; returns SSE events: thinking | token | metadata | done
@@ -85,7 +86,7 @@ GET  /health/providers
 confidence_level, citations[{chunk_id, title, source, source_label, url, page?, section?}],
 abstained, speech_text, speech_segments, follow_up_question, mode, conversation_id`
 
-Response modes: `dual_rag | static | web | grievance | groq_fallback`
+Response modes: `dual_rag | static | web | grievance`
 
 ---
 
@@ -123,13 +124,13 @@ and inactivity pauses — the architecture tolerates all three.
 - Free-tier limits: Groq/Gemini have rate limits, Render sleeps on inactivity,
   Supabase free projects may pause after inactivity.
 - Legal coverage: central + Gujarat only. Must be stated clearly in demo.
-- Agriculture corpus: not yet ingested. Queries route to `out_of_scope`.
+- Agriculture corpus: not yet ingested. Static retrieval maps `agriculture` → `pmfby` corpus; the web path serves `agriculture` fully. It does NOT route to `out_of_scope`.
 
 ---
 
 ## Definition of done
 
-✅ **Achieved.** Deployed PWA where text questions in 6 languages flow through
+✅ **Achieved.** Deployed static SPA where text questions in 11 languages flow through
 domain routing → hybrid RAG (static pgvector + web) → grounded, cited answers,
 with correct abstention on unsupported questions, and grievances can be created
 with multi-turn intake + status lookup guidance. Voice (STT/TTS) working via

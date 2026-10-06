@@ -18,7 +18,7 @@ defined in `CLAUDE.md`.
    metadata. Never present national/model rules as universally applicable.
 6. **Every citation must map to a chunk ID that was actually retrieved in that request.**
 7. **Never put API keys in frontend code, commit them, or expose them via
-   `NEXT_PUBLIC_*`.**
+   non-`VITE_` variables (only `VITE_`-prefixed vars reach the browser bundle).**
 
 ## Development Workflow
 
@@ -98,7 +98,7 @@ Read `PRD.md` for full scope. Summary:
 
 **MVP (Tier 1 & Tier 2):** 11-language (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML — expanded from the original 6) text + Sarvam voice chat, central cooperative info + Gujarat
 rules, 8-15 curated schemes, PMFBY, agriculture workflows, RBI/PMJDY financial
-literacy, 9-stage grievance workflow (text + status lookup), citations, confidence, abstention, responsive Next.js PWA.
+literacy, 9-stage grievance workflow (text + status lookup), citations, confidence, abstention, responsive static SPA (React + Vite, not a PWA).
 
 **Do NOT add before core is stable:** native apps, WhatsApp, blockchain, custom
 model training, self-hosted GPU, multi-agent frameworks, complex auth, analytics
@@ -120,7 +120,7 @@ to `CLAUDE.md` rather than silently doing it.
 | Firecrawl | Web crawl / scrape fallback | Rate limited |
 | Azure Cognitive Services | Fallback STT only | Rate limited |
 | Render | Backend hosting | Sleeps on inactivity |
-| Vercel | Frontend hosting | Hobby tier |
+| Static host/CDN | Frontend hosting (`npm run build` → `dist/`) | Hobby tier |
 
 See `docs/runbooks/provider-setup.md` for setup instructions.
 

@@ -2,7 +2,9 @@
 
 **Purpose:** Deterministically transform official source documents into queryable vector embeddings in Supabase, with full rollback safety and no invalid data entering the database.
 
-**Status:** SPEC COMPLETE — READY FOR IMPLEMENTATION
+**Status:** SPEC SUPERSEDED — implemented differently (see note)
+
+> **Current state (code-grounded):** this loop was never built as specified — there is no `run_ingestion.py`, no `ingestion/` package, and no `ingestion/tests/`. Actual ingestion is `backend/seed_parser.py` (MinerU `content_list_v2.json` → `corpus/seeds/chunks_jsonl/*.jsonl`) + `backend/ingest_seed.py` (embed + insert into Supabase). `corpus/manifests/mvp_sources.yaml` exists, and `atomic_replace_document()` exists in the migrations. Treat the body below as the design record, not the implementation.
 
 ---
 

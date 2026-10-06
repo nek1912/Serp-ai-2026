@@ -64,7 +64,8 @@ User message
 | Clerk auth (mandatory on chat/voice/grievance-write) | `backend/app/auth.py` |
 | Evidence controller + prompt builder | `backend/app/evidence_controller.py` |
 | Evidence gate (abstention thresholds) | `backend/app/evidence_gate.py` |
-| Citation verifier | `backend/app/citation_verifier.py` |
+| Citation verifier (full `web_*` IDs kept whole; truncated 8-char web prefixes stay ambiguous → invalid) | `backend/app/citation_verifier.py` |
+| Gemini reranker + Jina fallback (deadline clamped ≥10s, API minimum) | `backend/app/retrieval/gemini_reranker.py` |
 | Grievance workflow | `backend/app/grievance/workflow.py` |
 | Voice service (STT/TTS fallback) | `backend/app/services/voice_service.py` |
 | LLM providers | `backend/app/providers/groq_llm.py`, `gemini_llm.py` |
@@ -73,7 +74,7 @@ User message
 | Contracts (typed models) | `backend/app/contracts.py` |
 | Session store | `backend/app/session_store.py` |
 | Database schema | `backend/schema.sql` |
-| Frontend (Next.js 16) | `frontend/` |
+| Frontend (React 19 + Vite 8 SPA, not a PWA) | `frontend/` |
 | Main chat UI | `frontend/src/components/ChatWindow.tsx` |
 | i18n (11 languages) | `frontend/src/lib/i18n/` |
 | Document ingestion | `backend/seed_parser.py`, `backend/ingest_seed.py` |
@@ -115,7 +116,7 @@ User message
 
 ```
 POST /chat   (requires Clerk JWT → 401 {"detail":"Not authenticated"} without it)
-  Body: { question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }
+  Body: { question, session_id, language, ui_language_explicit?, state?, as_of_date?, history?, mode? }
   language: "en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"
   Response: { answer, language, domain, intent, entities, confidence,
               confidence_level, citations, abstained, speech_text,
@@ -196,13 +197,17 @@ uvicorn app.main:app --reload --port 8000
 # Frontend
 cd frontend
 npm install
-npm run dev   # starts on :3000
+cp .env.example .env   # fill in VITE_ values
+npm run dev   # starts on :5173
 ```
+
+Backend reads ONLY `backend/.env` (absolute path); a repo-root `.env`, if
+present, is ignored with a warning — never split keys across two files.
 
 ---
 
 ## Deployment
 
-- **Backend**: Render (`render.yaml`) — `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- **Frontend**: Vercel or Render Static Site
+- **Backend**: Render (`render.yaml`, backend only) — `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Frontend**: pure static bundle (`npm run build` → `dist/`), any static host/CDN
 - **Database**: Supabase (schema in `backend/schema.sql`)

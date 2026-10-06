@@ -2,7 +2,9 @@
 
 **Purpose:** Deliberately break every external dependency to verify that the system fails safely, deterministically, and without data loss.
 
-**Status:** SPEC COMPLETE — READY FOR IMPLEMENTATION
+**Status:** PARTIALLY IMPLEMENTED as pytest suites (see note)
+
+> **Current state (code-grounded):** there is no `tests/failure_injection/` directory and no mock provider server. The scenarios below are instead covered by `backend/tests/test_llm_failure_injection.py` (fallback/abstain), `test_llm_fallback.py`, `test_embedding_retry.py`, and `test_contract.py` (422 validation). Supabase/filesystem fault scenarios have no dedicated tests. Treat the body below as the design record plus the pytest mapping above.
 
 ---
 

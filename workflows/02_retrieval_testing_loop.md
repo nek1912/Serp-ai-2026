@@ -2,7 +2,9 @@
 
 **Purpose:** Measure and validate retrieval quality — Recall@k, MRR, domain routing accuracy, and jurisdiction contamination — against a gold-standard evaluation set.
 
-**Status:** SPEC COMPLETE — READY FOR IMPLEMENTATION (7 changes applied)
+**Status:** SPEC SUPERSEDED — implemented differently (see note)
+
+> **Current state (code-grounded):** this loop was never built as specified — there is no `python -m eval.run_retrieval_eval`, no `eval/gold_cases.yaml` or `eval/gate2_config.yaml` (the `eval/` dir holds live-probe variants: `run_live_retrieval_eval.py`, `gold_cases_live.yaml`), and no `backend/app/routes/retrieval.py`. Actual retrieval eval is `backend/tests/eval_rag_v3.py` plus the pytest suites (`test_retrieval*.py`, `test_evaluation_grounding.py`, `test_citation_*`). Treat the body below as the design record, not the implementation.
 
 ---
 
@@ -199,7 +201,7 @@ Construct adversarial queries:
 4. "What are the central government guidelines?" — central sources allowed
 5. "What is the Gujarat state policy on PMFBY?" — Gujarat + central allowed, Maharashtra forbidden
 
-This workflow tests **retrieval** jurisdiction contamination only. Generation output is evaluated in workflow 05 (release gate) and workflow 07 (generation + citation).
+This workflow tests **retrieval** jurisdiction contamination only. Generation output is evaluated in workflow 05 (release gate) and the grounding/citation pytest suites (`test_evaluation_grounding.py`, `test_citation_*`). (There is no workflow 07 file.)
 
 ---
 
