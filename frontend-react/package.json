@@ -8,7 +8,8 @@
     "dev:server": "node --env-file-if-exists=.env server/index.js",
     "dev:all": "concurrently -n web,api -c cyan,magenta \"npm:dev\" \"npm:dev:server\"",
     "build": "tsc --noEmit && vite build",
-    "preview": "cross-env NODE_ENV=production node --env-file-if-exists=.env server/index.js",
+    "start": "cross-env NODE_ENV=production node --env-file-if-exists=.env server/index.js",
+    "preview": "npm run start",
     "lint": "eslint .",
     "test": "vitest run",
     "i18n:coverage": "node scripts/i18n-coverage.mjs"

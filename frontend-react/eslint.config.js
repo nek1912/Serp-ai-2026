@@ -5,7 +5,19 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "server/**"] },
+  { ignores: ["dist/**", "node_modules/**"] },
+  {
+    // The Express BFF is plain JavaScript, not TypeScript. It is linted under
+    // its own block below rather than the TS one, which would flag plain-JS
+    // patterns as TS errors.
+    files: ["server/**/*.js"],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "module",
+      globals: { ...globals.node },
+    },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

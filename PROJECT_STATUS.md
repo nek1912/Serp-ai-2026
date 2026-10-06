@@ -13,7 +13,7 @@ worse than none — the next session will trust it.
 
 `2026-10-04` — **Pushed to GitHub (`nek1912/Serp-ai-2026`, branch `main`, 5 commits, in sync):** fresh repo init; hardened root `.gitignore` (`.env*` + `!.env.example`, `venv/`, `.vercel/`, `*.tsbuildinfo`, `.kilo/`, `output/`, `*_output.txt`, benchmark JSONs); secret scan clean (only `***`/`...` placeholders in docs); no file >50MB. Two push workarounds: (1) `.github/workflows/ci.yml` excluded from git (OAuth token lacks `workflow` scope — local copy kept, manage via GitHub web UI, noted in `.gitignore`), (2) slow/flaky network (HTTP 408/aborts on ~39MB pack) → pushed in 5 batches: code → 3× PDF batches → MinerU artifacts. Verify: `git status` clean, `main` == `origin/main` (413 files).
 
-`2026-09-18` — **Final answer presentation and WebRAG provider cleanup:** (1) Enhanced the existing Markdown renderer for answer headings, section rules, blockquotes, tables, links, and mobile-readable spacing without changing answer content, (2) Tavily API keys are attempted concurrently so a slow key cannot block a healthy replacement, (3) live WebRAG discovery returned 20 official results in approximately 15 seconds with the updated environment; Firecrawl remains a non-blocking fallback but returns HTTP 402 due exhausted credits, (4) focused backend checks passed: 42 tests; frontend targeted chat checks: MessageBubble passed, EvidencePanel has 5 pre-existing failures; frontend production build is blocked by existing missing `lenis` dependency/type errors.
+`2026-09-18` — **Final answer presentation and WebRAG provider cleanup:** (1) Enhanced the existing Markdown renderer for answer headings, section rules, blockquotes, tables, links, and mobile-readable spacing without changing answer content, (2) Tavily API keys are attempted concurrently so a slow key cannot block a healthy replacement, (3) live WebRAG discovery returned 20 official results in approximately 15 seconds with the updated environment; Firecrawl remains a non-blocking fallback but returns HTTP 402 due exhausted credits, (4) focused backend checks passed: 42 tests; frontend targeted chat checks: MessageBubble passed, EvidencePanel has 5 pre-existing failures; frontend production build is blocked by existing missing `lenis` dependency/type errors. **Resolved 2026-10-05**: the two dead components importing the absent `lenis` package were deleted, the 5 EvidencePanel failures were stale expectations, and the frontend build now succeeds.
 
 `2026-09-17` — **Chat output and WebRAG cleanup:** (1) Fixed `req.mode` being passed as a Groq model name (`rag_web`), which caused a 404 and made the requested pipeline fall back unnecessarily; pipeline mode is now passed separately, (2) strengthened the existing answer prompt to require the selected-language script, direct answer plus headings/bullets/short paragraphs, and preserved official terms, (3) WebRAG provider failures now log the provider and bounded error instead of being silent, (4) live discovery probe returned 20 official PMFBY results; Firecrawl remains unavailable because its account returned HTTP 402 insufficient credits, (5) focused verification: 94 tests passed, final WebRAG/evidence checks: 32 passed.
 
@@ -36,7 +36,7 @@ worse than none — the next session will trust it.
 ## Current state
 
 System is **feature-complete**. Backend RAG pipeline, 9-stage grievance workflow,
-voice I/O, multi-language support (6 languages), and Next.js frontend are all
+voice I/O, multi-language support (11 languages), and the React/Vite frontend are all
 implemented and wired together.
 
 **Selected state:** `gujarat` (`selected_state: "gujarat"` in `backend/app/config.py`)
@@ -86,8 +86,8 @@ implemented and wired together.
 | Grievance state persistence | `app/grievance/workflow.py` | working | Supabase `grievance_states` table, upsert on `conversation_id` |
 | Grievance localization layer | `app/routes/chat.py`, `app/routes/grievance.py`, `app/grievance/translations.py` | working | Backend translates: field prompts (FIELD_PROMPTS map), submission steps, followup prefixes, workflow prefixes, field labels, draft_summary, canonical dict; user values preserved verbatim; frontend translates field card labels via i18n dictionary |
 | Routing hierarchy | `app/routes/chat.py`, `app/grievance/workflow.py` | working | Tier 1: domain/intent → grievance; Tier 2: guidance intent → RAG, grievance-keyword override; Tier 3: non-English guard; informational regex |
-| Grievance UI (frontend) | `frontend/src/components/chat/GrievanceFlow.tsx` | working | Orchestrates stage panels; `GrievanceClassificationPanel`, `GrievanceFieldPanel`, `GrievanceCard` (renders i18n-translated field labels) |
-| Session isolation | `frontend/src/components/ChatWindow.tsx` | working | `useRef` + `resetSessionId()` prevents state leakage across "New Chat" |
+| Grievance UI (frontend) | `frontend-react/src/components/chat/GrievanceFlow.tsx` | working | Orchestrates stage panels; `GrievanceClassificationPanel`, `GrievanceFieldPanel`, `GrievanceCard` (renders i18n-translated field labels) |
+| Session isolation | `frontend-react/src/components/ChatWindow.tsx` | working | `useRef` + `resetSessionId()` prevents state leakage across "New Chat" |
 | VoiceService (STT/TTS fallback chain) | `app/services/voice_service.py` | working | STT: Sarvam→Azure; TTS: Sarvam only (Azure bad for Indic langs) |
 | Sarvam STT/TTS providers | `app/providers/sarvam_voice.py` | working | Primary voice provider |
 | Azure STT fallback | `app/providers/azure_voice.py` | working | Fallback STT only |
@@ -99,12 +99,13 @@ implemented and wired together.
 | Web discovery (Tavily / Firecrawl) | `app/web_rag/service.py` | working | |
 | Query classifier (web RAG) | `app/web_rag/query_classifier.py` | working | Domain, jurisdiction, state classification for web queries |
 | Source verifier | `app/security/source_verifier.py` | working | Trust-score based filtering in web RAG |
-| Next.js frontend (PWA) | `frontend/` | working | Next.js 16, React 19, Tailwind v4, GSAP; fully responsive (320px–desktop) |
-| Frontend pages | `frontend/src/app/` | working | `/` (home), `/chat`, `/grievance`, `/schemes`, `/services`, `/library`, `/faq`, `/legal` — all with responsive padding and mobile-first layouts; homepage bento cards + reviews section fully i18n'd |
-| Frontend i18n (11 languages) | `frontend/src/lib/i18n/` | working | EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML; includes field label translations (45 keys per locale) for grievance card rendering; bento card titles/texts (6 cards × 2 keys), reviews title, widget strings (greeting/subtitle/openFull/placeholder/error) |
-| ChatWindow (streaming SSE) | `frontend/src/components/ChatWindow.tsx` | working | Handles `thinking/step/token/metadata/done` SSE events, voice recording, citation display; localStorage keys use `jansahay_` prefix |
-| Thinking Process UI | `frontend/src/components/chat/ThinkingProcess.tsx` | working | Step-by-step reasoning display with auto-collapse and dropdown re-expand; replaces ThinkingBubble |
-| Evidence Panel | `frontend/src/components/chat/MessageBubble.tsx` | working | Unified `EvidencePanel` + `EvidenceCard` components; `data-evidence="true"` attribute; citation tags with `aria-expanded`/`aria-label`; keyboard-focusable; scroll-into-view on expand |
+| Frontend SPA (**not** a PWA) | `frontend-react/` | working | React 19 + Vite 8 + React Router 7 + Tailwind v4 + GSAP; fully responsive (320px–desktop). **No web app manifest and no service worker exist** — the PWA label in earlier entries of this file was never true. Migrated off Next.js on 2026-10-05; `frontend/` is retained as a fallback |
+| Frontend API layer (BFF) | `frontend-react/server/` | working | Express 5. The 11 former Next.js route handlers, now forwarding to FastAPI with a Clerk bearer token. Clerk middleware is scoped to `/api` only, so a bad key degrades the API rather than the whole site. Streams `/chat` unbuffered |
+| Frontend pages | `frontend-react/src/pages/` | working | `/` (home), `/chat`, `/grievance`, `/schemes`, `/services`, `/library`, `/faq`, `/legal` — all with responsive padding and mobile-first layouts; homepage bento cards + reviews section fully i18n'd |
+| Frontend i18n (11 languages) | `frontend-react/src/lib/i18n/` | working | EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML; includes field label translations (45 keys per locale) for grievance card rendering; bento card titles/texts (6 cards × 2 keys), reviews title, widget strings (greeting/subtitle/openFull/placeholder/error) |
+| ChatWindow (streaming SSE) | `frontend-react/src/components/ChatWindow.tsx` | working | Handles `thinking/step/token/metadata/done` SSE events, voice recording, citation display; localStorage keys use `jansahay_` prefix |
+| Thinking Process UI | `frontend-react/src/components/chat/ThinkingProcess.tsx` | working | Step-by-step reasoning display with auto-collapse and dropdown re-expand; replaces ThinkingBubble |
+| Evidence Panel | `frontend-react/src/components/chat/MessageBubble.tsx` | working | Unified `EvidencePanel` + `EvidenceCard` components; `data-evidence="true"` attribute; citation tags with `aria-expanded`/`aria-label`; keyboard-focusable; scroll-into-view on expand |
 | Document ingestion pipeline | `backend/seed_parser.py`, `backend/ingest_seed.py` | working | Parses MinerU `content_list_v2.json` → JSONL → embeds → Supabase |
 | Database schema | `backend/schema.sql` | working | `documents`, `chunks` (vector 768d, HNSW), `sessions`, `grievance_states` |
 
@@ -136,7 +137,7 @@ implemented and wired together.
 - **Dead Groq model**: `llama-3.3-70b-versatile` is DEAD on Groq (HTTP 404). Use `openai/gpt-oss-120b` (primary) and `qwen/qwen3.8-27b` (fallback) only.
 - **MoC_Young_Professionals_YPs.pdf**: Scanned/image-based PDF processed via EasyOCR + pymupdf. OCR text is lower quality than MinerU extraction. 213 chunks embedded (611 raw from OCR).
 - **Pre-existing test failures (backend)**: ~4 tests fail in `test_chat_route_refactored.py` due to `_has_active_grievance()` hitting unmocked Supabase `grievance_states` endpoint (not related to routing or localization bugs). Down from ~40 after routing fixes.
-- **Pre-existing test failures (frontend)**: 7 tests (4 ChatWindow sendChat mock, 1 LOCALES expectation, 1 Gujarati missing key, 1 read-aloud button test).
+- **Frontend tests: now fully green.** The 12 failures recorded here previously were measured on 2026-10-05 (not the 7 this file used to claim) and are all resolved: 3 were real source bugs (speech cancellation leaked a pending promise and an `Audio` element; `application_id` rendered as "Application Id"), 8 were stale test expectations, and 1 asserted a total i18n coverage that does not exist. `frontend-react` runs 127 tests across 19 files, all passing.
 - **PDF endpoint**: Regex allows `A-Za-z0-9_\-\.(), ` for filenames. Path traversal blocked. Non-PDF extensions rejected.
 - **`chunks.source_file` column**: Does NOT exist in live Supabase DB. `source_file` is stored in `chunks.metadata` JSONB instead.
 

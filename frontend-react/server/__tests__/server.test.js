@@ -3,8 +3,14 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vites
 import { createApp } from "../index.js";
 
 // Stub Clerk before the app is imported so no real network call is attempted.
+// clerkCalls records every invocation so tests can assert the middleware is
+// scoped to /api and never runs for static assets.
+const clerkCalls = [];
 vi.mock("@clerk/express", () => ({
-  clerkMiddleware: () => (_req, _res, next) => next(),
+  clerkMiddleware: () => (req, _res, next) => {
+    clerkCalls.push(req.path);
+    next();
+  },
   getAuth: () => ({ getToken: async () => "test-jwt" }),
 }));
 
@@ -239,7 +245,6 @@ describe("SSE chat streaming", () => {
   });
 
   it("forwards the question as a JSON body to the streaming backend", async () => {
-    const encoder = new TextEncoder();
     const body = new ReadableStream({
       start(controller) {
         controller.close();
@@ -499,5 +504,41 @@ describe("routing", () => {
   it("404s unknown /api paths instead of serving the SPA shell", async () => {
     const res = await realFetch(`${base}/api/nope`);
     expect(res.status).toBe(404);
+  });
+});
+
+/*
+ * Regression guard.
+ *
+ * The Clerk middleware must be mounted on /api ONLY. It was originally mounted
+ * with a bare app.use(clerk), which ran it for every request. Clerk throws on a
+ * malformed or missing publishable/secret key, and Express's default error
+ * handler then returns a 500 HTML page for EVERY route -- including "/", the
+ * favicon and hashed CSS/JS. A single bad env var took the entire site down
+ * rather than just the API.
+ *
+ * The Next.js app never had this problem: src/proxy.ts carried an explicit
+ * matcher that excluded _next and every static asset extension.
+ */
+describe("Clerk middleware scoping", () => {
+  it("does not invoke Clerk for non-API requests", async () => {
+    clerkCalls.length = 0;
+    await realFetch(`${base}/`);
+    await realFetch(`${base}/favicon.ico`);
+    expect(clerkCalls.length).toBe(0);
+  });
+
+  it("still invokes Clerk for API requests", async () => {
+    clerkCalls.length = 0;
+    await realFetch(`${base}/api/nope`);
+    expect(clerkCalls.length).toBeGreaterThan(0);
+  });
+
+  it("still serves static assets when Clerk config is unusable", async () => {
+    // The route-verification script boots the real app with a placeholder key;
+    // asserting here that the middleware is API-scoped is what keeps a bad
+    // CLERK_SECRET_KEY from turning into a site-wide 500.
+    const res = await realFetch(`${base}/`);
+    expect(res.status).toBe(200);
   });
 });

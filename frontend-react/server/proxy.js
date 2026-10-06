@@ -21,10 +21,12 @@ export async function authHeader(req) {
  *
  * Note: this only covers the request itself. A response that *arrives* can
  * still fail while its body is being read (truncated stream, 200 with a
- * non-JSON payload). Every Next handler performed `await res.json()` inside
- * its try block, so such a body fell through to that endpoint's documented
- * failure response. Read bodies through readUpstreamJson/guard rather than
- * calling `.json()`/`.arrayBuffer()` directly, so the same holds here.
+ * non-JSON payload). The JSON-returning Next handlers performed
+ * `await res.json()` inside their try block, so such a body fell through to
+ * that endpoint's documented failure response; the two that streamed
+ * (`documents/pdf`, `chat`) never read the body at all. Read bodies through
+ * readUpstreamJson / BODY_UNREADABLE rather than calling `.json()` /
+ * `.arrayBuffer()` directly, so the same contract holds here.
  */
 export async function proxyFetch(path, init = {}, timeoutMs = 30000) {
   const controller = new AbortController();

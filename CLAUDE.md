@@ -28,7 +28,8 @@ tells you what's actually built and what the current state is. This file
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Frontend | Next.js 16 + React 19 + Tailwind CSS 4 | PWA, hosted on Vercel |
+| Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 | Static SPA in `frontend-react/`. **Not a PWA** — no manifest, no service worker |
+| Frontend API layer | Express 5 BFF in `frontend-react/server/` | Owns the 11 `/api/*` routes and injects the Clerk bearer token. **Never reintroduce route handlers on the client** — `CLERK_SECRET_KEY` cannot reach a browser bundle |
 | Backend | FastAPI (Python ≥3.11) on Render Free | `uvicorn app.main:app` |
 | DB + vectors | Supabase Postgres + pgvector (HNSW cosine) | 768d embeddings |
 | Embeddings | Jina Embeddings v3 (primary) | 768d, task-typed |
@@ -78,7 +79,7 @@ SSE events: `thinking | token | metadata | done`
   no bare `except`.
 - Every external provider call goes through an adapter with explicit timeout and
   fallback handling — never call a provider SDK directly from route handlers.
-- Never put API keys in frontend code, commit them, or expose via `NEXT_PUBLIC_*`.
+- Never put API keys in frontend code, commit them, or expose via `VITE_*`. `CLERK_SECRET_KEY` and `BACKEND_API_URL` are read only by `frontend-react/server/`.
   Backend environment variables only.
 - Structured logs. Never log API keys, auth tokens, or full grievance PII.
 - Write tests for: domain routing, jurisdiction filtering, retrieval, citation
@@ -96,7 +97,7 @@ SSE events: `thinking | token | metadata | done`
 - ✅ StaticRAGService — Supabase pgvector hybrid retrieval (dense + lexical RRF)
 - ✅ WebRAGService — 10-step pipeline (Tavily/Firecrawl → BM25 → Gemini rerank → verify)
 - ✅ Evidence gate, citation verifier, abstention
-- ✅ 6-language frontend (EN, HI, GU, MR, BN, TA) with chat, grievance, schemes, library pages
+- ✅ 11-language frontend (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML) with chat, grievance, schemes, library pages. Coverage is incomplete: 791 of 3,740 strings untranslated (`npm run i18n:coverage`); missing keys fall back to English
 - ✅ Document ingestion: 11 docs, 4778 chunks (pacs_governance, pacs_computerization, pmfby, financial_inclusion)
 - ✅ Grievance localization — `FIELD_PROMPTS` (30 prompts), `SUBMISSION_STEPS`, `FOLLOWUP_PREFIX`, `WORKFLOW_PREFIX` maps in `translations.py`; `translate_field_prompt()` for field questions; frontend field card labels via `dictionaries.ts` i18n lookup
 

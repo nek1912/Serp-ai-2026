@@ -47,9 +47,17 @@ export async function proxySse(req, res, { path, body }) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      /*
+       * Node's res.write on an HTTP/1.1 response without content-length or
+       * chunked encoding disabled writes straight to the socket, so tokens reach
+       * the browser as they arrive. Express's res has no `flush` method -- only
+       * the `compression` middleware adds one, and that is deliberately NOT a
+       * dependency of this process, because it would buffer the stream and
+       * destroy the incremental rendering this endpoint exists for.
+       *
+       * Do not "fix" this by adding compression or an explicit flush call.
+       */
       res.write(Buffer.from(value));
-      // Flush each chunk so the browser renders tokens as they arrive.
-      res.flush?.();
     }
   } catch {
     // Client disconnected or upstream aborted mid-stream. Nothing to do;

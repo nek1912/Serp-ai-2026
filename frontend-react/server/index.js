@@ -34,7 +34,23 @@ const streamUrl = () =>
 export function createApp() {
   const app = express();
 
-  app.use(clerk);
+  /*
+   * Clerk runs ONLY on /api.
+   *
+   * The Next.js app did the same thing via an explicit matcher in
+   * src/proxy.ts, which excluded _next and every static asset extension.
+   * Mounting the middleware globally instead means a malformed or missing
+   * CLERK_SECRET_KEY / VITE_CLERK_PUBLISHABLE_KEY makes Clerk throw, and
+   * Express's default handler then returns a 500 HTML page for EVERY request --
+   * including "/", the favicon and hashed CSS/JS. One bad env var takes the
+   * whole site down, not just the API.
+   *
+   * The BFF only needs a server-side token to forward to FastAPI, so scoping the
+   * middleware to /api is both correct and strictly safer. The browser gets its
+   * Clerk session from @clerk/react using the publishable key; no server-side
+   * middleware is involved in rendering pages.
+   */
+  app.use("/api", clerk);
 
   // ── Chat (SSE) ────────────────────────────────────────────────────────
   const chatHandler = async (req, res) => {
@@ -182,7 +198,7 @@ export function createApp() {
       // escaping as a 500, matching Next where `await res.json()` was inside
       // the try and the catch fell through to the speechSynthesis fallback.
       const data = await readUpstreamJson(upstream);
-      if (data !== BODY_UNREADABLE && data.audio) {
+      if (data !== BODY_UNREADABLE && data?.audio) {
         return res
           .status(200)
           .set("Content-Type", "audio/mpeg")
@@ -222,7 +238,7 @@ export function createApp() {
       // Unparseable 200 falls through to the 503, as in Next where
       // `await res.json()` was inside the try.
       const data = await readUpstreamJson(upstream);
-      if (data !== BODY_UNREADABLE && data.audio) {
+      if (data !== BODY_UNREADABLE && data?.audio) {
         return res.json({
           audio: data.audio,
           language: data.language || segments[0].language,
