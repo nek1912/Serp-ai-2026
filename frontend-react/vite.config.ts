@@ -11,10 +11,10 @@ export default defineConfig({
     },
   },
   server: {
-    // 5173 was taken by an unrelated project on this machine. Change the port
-    // here AND the two VITE_CLERK_*_URL values in .env -- they must agree, or
-    // Clerk redirects to a dead port.
-    port: Number(process.env.VITE_PORT) || 5180,
+    // Override with VITE_PORT in .env if this port is taken on your machine.
+    // VITE_CLERK_SIGN_IN_URL / _SIGN_UP_URL must agree with it, or Clerk
+    // redirects to a dead port.
+    port: Number(process.env.VITE_PORT) || 5173,
     // Fail loudly instead of silently auto-incrementing, so the port in use
     // and the Clerk redirect URLs can never drift apart unnoticed.
     strictPort: true,

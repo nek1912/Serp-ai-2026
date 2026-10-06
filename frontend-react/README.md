@@ -29,8 +29,8 @@ cp .env.example .env    # then fill in the four values
 | `VITE_CLERK_SIGN_UP_URL` | browser | Sign-up redirect target |
 | `CLERK_PUBLISHABLE_KEY` | **server only** | Read by `@clerk/express` at runtime. May be named `VITE_CLERK_PUBLISHABLE_KEY` instead, but the server reads the conventional name first |
 | `CLERK_SECRET_KEY` | **server only** | Mints the bearer token forwarded to FastAPI |
-| `BACKEND_API_URL` | **server only** | Python backend base URL (`http://localhost:8010`) |
-| `VITE_PORT` | dev only | Vite dev-server port (default 5180) |
+| `BACKEND_API_URL` | **server only** | Python backend base URL (`http://localhost:8000`) |
+| `VITE_PORT` | dev only | Vite dev-server port (default 5173) |
 | `BFF_PORT` | dev only | BFF port that Vite proxies `/api` to (default 8787) |
 
 Only `VITE_`-prefixed variables reach the browser bundle. `CLERK_SECRET_KEY` is
@@ -42,7 +42,7 @@ Add your sign-in and sign-up URLs as **redirect URLs** in the Clerk dashboard.
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | Vite dev server on `:5180` (set `VITE_PORT`), proxying `/api` → `:8787` |
+| `npm run dev` | Vite dev server on `:5173` (set `VITE_PORT`), proxying `/api` → `:8787` |
 | `npm run dev:server` | Express BFF alone on `:8787` |
 | `npm run dev:all` | Both, via `concurrently` |
 | `npm run build` | Type-check, then emit static assets to `dist/` |
@@ -60,7 +60,7 @@ dependency.
 ```
 Development                          Production
 ───────────                          ───────────
-Browser :5180                        Browser
+Browser :5173                        Browser
    │                                    │
    ├─ /api/* ──proxy──► Express :8787   └─► Express (single process)
    │                          │                    ├─ /api/* ──► FastAPI
