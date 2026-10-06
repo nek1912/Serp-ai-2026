@@ -44,18 +44,31 @@ function SectionLabel({ children }: { children: ReactNode }) {
  * title-caser produces "Application Id", which reads as a typo to a citizen
  * filling in a government form, so the initialism set is explicit rather than
  * guessed.
+ *
+ * Entries are the words that appear as their own segment in real backend field
+ * keys (see backend/app/grievance/field_detector.py). Words that merely CONTAIN
+ * an initialism must not be added: "identity" is not an initialism, and
+ * "aadhaar" is deliberately absent because the backend's own label for it is
+ * "Aadhaar Number", not "AADHAAR".
  */
 const FIELD_INITIALISMS = new Set([
-  "id",
-  "url",
-  "upi",
-  "ifsc",
-  "pan",
-  "kcc",
-  "aadhaar",
+  "cibil",
+  "discom",
+  "esi",
+  "fps",
   "gst",
+  "id",
+  "ifsc",
+  "kcc",
+  "pan",
+  "pf",
   "pin",
+  "rte",
+  "rto",
+  "rti",
   "sms",
+  "upi",
+  "url",
 ]);
 
 function humanizeFieldKey(key: string): string {
