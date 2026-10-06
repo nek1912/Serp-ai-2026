@@ -651,12 +651,30 @@ describe("error handling", () => {
  * SPA.
  */
 describe("request body limits", () => {
-  it("rejects an oversized JSON body with 413", async () => {
-    const huge = "x".repeat(1_200_000);
-    const res = await realFetch(`${base}/api/grievance/answer`, {
+  it.each([
+    ["/api/grievance/answer", {}],
+    ["/api/translate", {}],
+    ["/api/voice/speak", { segments: [{ text: "x", language: "hi" }] }],
+  ])("rejects an oversized JSON body with 413 at %s", async (path, payload) => {
+    const res = await realFetch(`${base}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blob: huge }),
+      body: JSON.stringify({ ...payload, blob: "x".repeat(1_200_000) }),
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe("body_too_large");
+  });
+
+  it("rejects an oversized multipart body with 413 at /api/speak", async () => {
+    const boundary = "----x";
+    const body =
+      `--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\n` +
+      "x".repeat(1_200_000) +
+      `\r\n--${boundary}--\r\n`;
+    const res = await realFetch(`${base}/api/speak`, {
+      method: "POST",
+      headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+      body,
     });
     expect(res.status).toBe(413);
     expect((await res.json()).error).toBe("body_too_large");
@@ -668,5 +686,68 @@ describe("request body limits", () => {
     );
     const res = await json("/api/grievance/answer", { conversation_id: "c1" });
     expect(res.status).toBe(200);
+  });
+});
+
+/*
+ * I-2 regression guard.
+ *
+ * The first attempt at disconnect teardown used req.on("close"). Since Node 16
+ * that fires when the request BODY finishes -- which readJson already triggered
+ * before proxySse attached the listener -- so the abort never happened and an
+ * abandoned chat sat parked in reader.read() with the upstream still running.
+ * Only res.on("close") (response socket teardown) means what we want.
+ *
+ * This asserts the observable consequence: a client that walks away mid-stream
+ * causes the upstream reader to be released promptly, rather than the loop
+ * continuing to pull chunks for a dead socket.
+ */
+
+
+describe("SSE client-disconnect teardown", () => {
+  it("aborts the upstream request when the client disconnects", async () => {
+    let capturedSignal;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      capturedSignal = init.signal;
+      // One chunk, then silence: the loop parks in reader.read() exactly as it
+      // would during a real retrieval phase, so the disconnect arrives while
+      // the handler is genuinely mid-stream.
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        ),
+      );
+    });
+
+    const s = createApp().listen(0);
+    await new Promise((r) => s.once("listening", r));
+
+    const controller = new AbortController();
+    const inflight = realFetch(`http://127.0.0.1:${s.address().port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "hi" }),
+      signal: controller.signal,
+    }).catch(() => {});
+
+    await new Promise((r) => setTimeout(r, 250));
+    expect(capturedSignal, "upstream fetch received an abort signal").toBeDefined();
+    expect(capturedSignal.aborted, "not aborted before the client leaves").toBe(false);
+
+    controller.abort();
+    await new Promise((r) => setTimeout(r, 250));
+    void inflight;
+    s.close();
+
+    expect(
+      capturedSignal.aborted,
+      "upstream fetch was NOT aborted after the client disconnected - the " +
+        "teardown is listening to the wrong event",
+    ).toBe(true);
   });
 });

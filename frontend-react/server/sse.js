@@ -27,7 +27,20 @@ const STREAM_TIMEOUT_MS = 120000;
 export async function proxySse(req, res, { path, body }) {
   const controller = new AbortController();
   const onClientGone = () => controller.abort();
-  req.on("close", onClientGone);
+  /*
+   * res.on("close"), NOT req.on("close").
+   *
+   * Since Node 16, `req` emits "close" when the request BODY finishes being
+   * consumed -- which readJson already triggered before this handler runs. So a
+   * req listener attached here never fires again, and the abort never happened:
+   * an abandoned chat sat parked in reader.read() with the upstream still
+   * burning retrieval and LLM tokens for an answer nobody would read.
+   *
+   * `res` emits "close" when the RESPONSE socket is torn down, which is the
+   * event we actually mean. It also fires on normal completion, so the
+   * `finally` block removes the listener to avoid an abort after the fact.
+   */
+  res.on("close", onClientGone);
   const timer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
 
   try {
@@ -104,7 +117,7 @@ export async function proxySse(req, res, { path, body }) {
     // browser already has whatever partial answer arrived.
   } finally {
     clearTimeout(timer);
-    req.off("close", onClientGone);
+    res.off("close", onClientGone);
     if (!res.headersSent) {
       res.status(503).json({ error: "retrieval_backend_unavailable" });
     } else if (!res.writableEnded) {

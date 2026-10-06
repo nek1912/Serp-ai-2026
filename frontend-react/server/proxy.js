@@ -89,8 +89,8 @@ export async function proxyJson(req, res, { path, errorKey }) {
     body = await readJson(req);
   } catch (err) {
     // Oversized bodies are a client error, not malformed JSON.
-    if (err?.status === 413) {
-      return res.status(413).json({ error: "body_too_large" });
+    if (err?.status === 413 || err?.code === "body_too_large") {
+      return bodyErrorResponse(res, err, null);
     }
     return res.status(400).json({ error: "Invalid JSON" });
   }
@@ -149,14 +149,33 @@ export function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let overLimit = false;
 
     req.on("data", (chunk) => {
+      if (overLimit) return; // keep draining, but buffer nothing more
       size += chunk.length;
       if (size > limit) {
-        // Stop accumulating. Pause rather than destroy: destroying the socket
-        // races the 413 response and the client sees ECONNRESET instead of the
-        // status code it needs to act on.
-        req.pause();
+        /*
+         * Stop buffering but KEEP READING to the end of the request.
+         *
+         * Pausing here looks safer but is not: the socket retains unread body
+         * bytes, and on a keep-alive connection Node hands that same socket to
+         * the next request, where the leftovers are parsed as a request line
+         * and hang an unrelated call. Destroying the socket instead races the
+         * 413 -- the client sees ECONNRESET and never learns why.
+         *
+         * Draining costs bandwidth but holds memory flat, which is the actual
+         * goal, and leaves a clean connection the client can reuse.
+         */
+        overLimit = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      if (overLimit) {
         reject(
           Object.assign(new Error("request body too large"), {
             status: 413,
@@ -165,9 +184,9 @@ export function readBody(req, limit = MAX_BODY_BYTES) {
         );
         return;
       }
-      chunks.push(chunk);
+      resolve(Buffer.concat(chunks));
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+
     req.on("error", reject);
   });
 }
@@ -178,6 +197,23 @@ export async function readJson(req) {
   const raw = buf.toString("utf8");
   if (!raw.trim()) return {};
   return JSON.parse(raw);
+}
+
+/**
+ * Maps a body-read failure onto the right client-facing response.
+ *
+ * The 413 has to be honoured at EVERY body-reading site, not just the grievance
+ * routes: an oversized upload is a distinct condition from malformed input, and
+ * silently reporting it as 400 tells the client to fix the payload when the real
+ * problem is its size.
+ */
+export function bodyErrorResponse(res, err, malformed) {
+  if (err?.status === 413 || err?.code === "body_too_large") {
+    return res.status(413).json({ error: "body_too_large" });
+  }
+  return typeof malformed === "string"
+    ? res.status(400).send(malformed)
+    : res.status(400).json(malformed);
 }
 
 /** Converts the backend's hex-encoded audio into a binary Buffer. */

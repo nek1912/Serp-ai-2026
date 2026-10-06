@@ -14,6 +14,7 @@ import {
   readUpstreamJson,
   readUpstreamBuffer,
   readBody,
+  bodyErrorResponse,
   BODY_UNREADABLE,
 } from "./proxy.js";
 import { proxySse } from "./sse.js";
@@ -57,10 +58,8 @@ export function createApp() {
     let body;
     try {
       body = await readJson(req);
-    } catch {
-      return res
-        .status(400)
-        .json({ error: "Invalid JSON" });
+    } catch (err) {
+      return bodyErrorResponse(res, err, { error: "Invalid JSON" });
     }
     return proxySse(req, res, { path: streamUrl(), body });
   };
@@ -178,8 +177,8 @@ export function createApp() {
       const parsed = parseMultipart(raw, req.headers["content-type"] || "");
       text = parsed.text;
       language = parsed.language || "hi";
-    } catch {
-      return res.status(400).send("Missing text");
+    } catch (err) {
+      return bodyErrorResponse(res, err, "Missing text");
     }
     if (!text) return res.status(400).send("Missing text");
 
@@ -216,8 +215,8 @@ export function createApp() {
     let body;
     try {
       body = await readJson(req);
-    } catch {
-      return res.status(400).json({ error: "Missing segments" });
+    } catch (err) {
+      return bodyErrorResponse(res, err, { error: "Missing segments" });
     }
     const segments = body.segments;
     if (!segments || segments.length === 0) {
@@ -253,8 +252,8 @@ export function createApp() {
     let body;
     try {
       body = await readJson(req);
-    } catch {
-      return res.status(400).json({ error: "Invalid JSON" });
+    } catch (err) {
+      return bodyErrorResponse(res, err, { error: "Invalid JSON" });
     }
 
     const texts = body.texts ?? [];
