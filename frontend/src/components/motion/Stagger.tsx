@@ -1,4 +1,3 @@
-"use client";
 import { useEffect, useRef, type ReactNode, type ElementType } from "react";
 import { gsap } from "./gsap";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion";

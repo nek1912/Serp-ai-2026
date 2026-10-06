@@ -1,36 +1,108 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# JanSahay Frontend — React + Vite
 
-## Getting Started
+Multilingual citizen-assistance frontend for cooperative governance, PMFBY, PACS,
+financial literacy and grievance redressal.
 
-First, run the development server:
+React 19 + Vite 8 single-page app. The browser talks **directly** to the Python
+FastAPI backend and attaches Clerk's own session token to every request. There is
+no proxy server and no second port.
+
+---
+
+## Requirements
+
+- **Node 20.19+ or 22.12+** (Vite 8 engine floor; developed on 24.13)
+- A running Python backend (default `http://localhost:8000`)
+- A Clerk application with a publishable key
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env    # then fill in the values
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Variable | Scope | Purpose |
+|---|---|---|
+| `VITE_CLERK_PUBLISHABLE_KEY` | browser | Clerk session in the browser |
+| `VITE_CLERK_SIGN_IN_URL` | browser | Sign-in redirect target |
+| `VITE_CLERK_SIGN_UP_URL` | browser | Sign-up redirect target |
+| `VITE_BACKEND_API_URL` | browser | FastAPI base URL, e.g. `http://localhost:8000` |
+| `VITE_PORT` | dev only | Vite dev-server port (default 5173) |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Only `VITE_`-prefixed variables reach the browser bundle. `CLERK_SECRET_KEY` is
+never needed here; it lives in the repo-root `.env` and stays inside the backend.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Add your sign-in and sign-up URLs as **redirect URLs** in the Clerk dashboard.
 
-## Learn More
+## Scripts
 
-To learn more about Next.js, take a look at the following resources:
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on `:5173` (set `VITE_PORT`) |
+| `npm run build` | Type-check, then emit static assets to `dist/` |
+| `npm run lint` | ESLint over `src/` |
+| `npm test` | Vitest — 84 tests across 18 files |
+| `npm run i18n:coverage` | Report per-locale translation coverage |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Architecture
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+Browser :5173
+   |
+   |-- Clerk session token (Authorization: Bearer)
+   |
+   +-- POST /chat/stream  (SSE)  -----------------------> FastAPI :8000
+   +-- POST /grievances/*                            ---> FastAPI
+   +-- POST /voice/speak, /translate, /documents/pdf/* ---> FastAPI
+```
 
-## Deploy on Vercel
+Two ports only: the dev server and FastAPI. Cross-origin, so the backend's
+`ALLOWED_ORIGINS` must list this dev server's origin.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+`src/lib/backend.ts` owns the whole conversation with FastAPI: the base URL, the
+`/api/*` → FastAPI path mapping, and the bearer header. `App.tsx` hands Clerk's
+`useAuth().getToken` to it once at mount, because `api.ts` and `speech.ts` are
+plain modules that cannot call hooks.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Authentication
+
+The browser holds a Clerk **session token** only. `CLERK_SECRET_KEY` never leaves
+the backend, where Clerk's own JWKS verification lives in `app/auth.py`.
+
+Because the browser signs its own requests, the frontend's Clerk instance and the
+backend's `CLERK_ISSUER` **must be the same Clerk application**. If they diverge,
+every authenticated call returns 401 while the app appears to work.
+
+## Deploying
+
+This is a pure static bundle. Serve `dist/` from any static host or CDN.
+
+```bash
+npm ci && npm run build
+```
+
+`render.yaml` at the repo root configures only the Python backend and has **not**
+been updated for this frontend.
+
+## Known limitations
+
+- **Not a PWA.** No web app manifest and no service worker.
+- **No dark mode.** The palette is light-only.
+- **Translation coverage is incomplete.** 11 locales are wired up, but 791 of
+  3,740 possible strings are untranslated (78.9%; `bn` lowest at 65.2%). Missing
+  keys fall back to English. Run `npm run i18n:coverage`.
+- **The main JS bundle is ~1.5 MB** (~400 kB gzipped), mostly `gsap`,
+  `react-markdown` and Clerk. Not code-split.
+
+## Conventions
+
+- `@/` resolves to `src/` in `tsconfig.json`, `vite.config.ts` and
+  `vitest.config.mjs`. All three must stay in agreement.
+- `src/styles/globals.css` is the design system and is kept byte-identical to
+  the original. Its 12 `--font-*` variables are declared in `index.html`;
+  `globals.css` composes font stacks from them by name — do not rename them.
+- Components carry no `"use client"` directive; there is no such thing in a Vite
+  SPA.
+- ESLint reports 46 warnings, all pre-existing in the copied source. They are
+  demoted to `warn` rather than refactored, so the debt stays visible.

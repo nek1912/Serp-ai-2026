@@ -28,7 +28,7 @@ tells you what's actually built and what the current state is. This file
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 | Static SPA in `frontend-react/`. **Not a PWA** — no manifest, no service worker |
+| Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 | Static SPA in `frontend/`. **Not a PWA** — no manifest, no service worker |
 | Frontend API access | Direct browser → FastAPI | The browser attaches Clerk's session token. `src/lib/backend.ts` owns the URL mapping. Never reintroduce a proxy holding `CLERK_SECRET_KEY` — it is not needed and adds a port to deploy |
 | Backend | FastAPI (Python ≥3.11) on Render Free | `uvicorn app.main:app` |
 | DB + vectors | Supabase Postgres + pgvector (HNSW cosine) | 768d embeddings |

@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect } from "react";
 import { IconChevronDown } from "@/components/ui/Icons";

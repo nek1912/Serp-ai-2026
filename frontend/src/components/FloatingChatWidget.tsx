@@ -1,6 +1,5 @@
-"use client";
 import { useState, useRef, useEffect, useCallback } from "react";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { sendChatStream, type StreamEvent } from "@/lib/api";
@@ -183,7 +182,7 @@ export function FloatingChatWidget() {
             </div>
             <div className="flex items-center gap-1">
               <Link
-                href="/chat"
+                to="/chat"
                 className="rounded-full bg-[var(--primary)] px-3 py-1 text-[11px] font-semibold text-[var(--on-primary)] transition-colors hover:bg-[#1a1a1a]"
               >
                 {t("chat.widget.openFull")}

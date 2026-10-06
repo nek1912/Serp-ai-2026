@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n/provider";
 import { IconCheck, IconBuilding, IconAlertTriangle } from "@/components/ui/Icons";

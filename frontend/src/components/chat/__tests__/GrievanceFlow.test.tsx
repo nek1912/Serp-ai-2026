@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { LanguageProvider } from "@/lib/i18n/provider";
 import type { ChatResponse } from "@/lib/api";
 
@@ -8,15 +9,6 @@ vi.mock("@/lib/speech", async () => {
   const actual = await vi.importActual<typeof import("@/lib/speech")>("@/lib/speech");
   return { ...actual, speakSegments: vi.fn(async () => {}) };
 });
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-    back: vi.fn(),
-    prefetch: vi.fn(),
-  }),
-  useSearchParams: () => new URLSearchParams(),
-}));
 
 // Mock the API modules used by GrievanceFlow
 vi.mock("@/lib/api", async () => {
@@ -200,13 +192,15 @@ function renderFlow(
   onGrievanceFinalized?: (r: ChatResponse) => void,
 ) {
   return render(
-    <LanguageProvider>
-      <GrievanceFlow
-        response={resp}
-        onSendMessage={onSendMessage}
-        onGrievanceFinalized={onGrievanceFinalized}
-      />
-    </LanguageProvider>,
+    <MemoryRouter>
+      <LanguageProvider>
+        <GrievanceFlow
+          response={resp}
+          onSendMessage={onSendMessage}
+          onGrievanceFinalized={onGrievanceFinalized}
+        />
+      </LanguageProvider>
+    </MemoryRouter>,
   );
 }
 

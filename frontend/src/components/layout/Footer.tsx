@@ -1,5 +1,4 @@
-"use client";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { useI18n } from "@/lib/i18n/provider";
 
 const COLUMNS = [
@@ -28,7 +27,7 @@ export function Footer() {
       <div className="mx-auto max-w-[1280px] px-4 py-8 md:px-6 lg:px-8">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <Link href="/" className="group inline-flex items-center gap-2">
+            <Link to="/" className="group inline-flex items-center gap-2">
               <img src="/favicon.ico" alt="JanSahay logo" className="h-7 w-7 rounded-full object-cover" />
               <span className="display text-lg text-[var(--ink)]">JanSahay</span>
             </Link>
@@ -45,7 +44,7 @@ export function Footer() {
                 {col.links.map((link) => (
                   <li key={link.href}>
                     <Link
-                      href={link.href}
+                      to={link.href}
                       className="text-[13px] text-[var(--body)] hover:text-[var(--ink)] transition-colors"
                     >
                       {t(link.key)}
@@ -62,7 +61,7 @@ export function Footer() {
             <ul className="mt-2 space-y-1">
               <li>
                 <Link
-                  href="/chat"
+                  to="/chat"
                   className="text-[13px] text-[var(--body)] hover:text-[var(--ink)] transition-colors"
                 >
                   {t("nav.chat")}

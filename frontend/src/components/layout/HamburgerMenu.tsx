@@ -1,5 +1,4 @@
-"use client";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useI18n } from "@/lib/i18n/provider";
 import { LanguageSwitcher } from "./LanguageSwitcher";
@@ -60,7 +59,7 @@ export function HamburgerMenu() {
               {LINKS.map((l) => (
                 <Link
                   key={l.href}
-                  href={l.href}
+                  to={l.href}
                   onClick={() => setOpen(false)}
                   className="rounded-[14px] px-4 py-2.5 text-[14px] font-medium text-[var(--body)] transition-colors hover:bg-[var(--accent-tint-soft)] hover:text-[var(--ink)]"
                 >
@@ -73,7 +72,7 @@ export function HamburgerMenu() {
               <div className="flex items-center justify-between gap-3">
                 <LanguageSwitcher />
                 <Link
-                  href="/chat"
+                  to="/chat"
                   onClick={() => setOpen(false)}
                   className="flex flex-1 items-center justify-center rounded-full bg-[var(--primary)] px-5 py-2.5 text-[13px] font-semibold text-[var(--on-primary)]"
                 >

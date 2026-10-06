@@ -21,6 +21,6 @@ test("interpolates {vars} in strings", () => {
 });
 
 test("root layout example translations resolve", () => {
-  expect(translate("en", "landing.ctaChat")).toBe("Chat now");
+  expect(translate("en", "landing.ctaChat")).toBe("Ask JanSahay →");
   expect(translate("hi", "evidence.strong")).toBe("प्रबल स्रोत समर्थन");
 });

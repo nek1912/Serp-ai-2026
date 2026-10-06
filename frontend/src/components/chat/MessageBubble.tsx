@@ -1,8 +1,7 @@
-"use client";
 import { useState, useMemo, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import type { ChatResponse } from "@/lib/api";
 import { useI18n } from "@/lib/i18n/provider";
 import { Alert } from "@/components/ui/Alert";
@@ -22,6 +21,7 @@ import { deco } from "@/lib/data/deco";
 import { createSpeechService, speakSegments } from "@/lib/speech";
 import { EvidenceBand } from "@/components/EvidenceBand";
 import { evidenceBand } from "@/lib/band";
+import styles from "./MessageBubble.module.css";
 
 type Citation = ChatResponse["citations"][number];
 
@@ -402,7 +402,7 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
         </div>
 
         {/* Answer Content */}
-        <div className={`font-answer text-sm sm:text-base leading-relaxed text-[var(--ink)] prose prose-sm max-w-none prose-headings:font-semibold prose-headings:text-[var(--ink)] prose-p:my-2 prose-p:leading-relaxed prose-ul:my-2.5 prose-ul:list-disc prose-ul:pl-5 prose-ol:my-2.5 prose-ol:list-decimal prose-ol:pl-5 prose-li:my-1 prose-strong:font-semibold prose-strong:text-[var(--ink)] prose-table:text-xs prose-th:font-semibold prose-td:py-1 prose-th:py-1 prose-pre:bg-[var(--primary)] prose-pre:text-[var(--on-primary)] prose-code:text-[var(--ink)] ${isStreaming ? "streaming-text" : ""}`}>
+        <div className={`font-answer text-sm sm:text-base leading-relaxed text-[var(--ink)] prose prose-sm max-w-none prose-headings:font-semibold prose-headings:text-[var(--ink)] prose-p:my-2 prose-p:leading-relaxed prose-ul:my-2.5 prose-ul:list-disc prose-ul:pl-5 prose-ol:my-2.5 prose-ol:list-decimal prose-ol:pl-5 prose-li:my-1 prose-strong:font-semibold prose-strong:text-[var(--ink)] prose-table:text-xs prose-th:font-semibold prose-td:py-1 prose-th:py-1 prose-pre:bg-[var(--primary)] prose-pre:text-[var(--on-primary)] prose-code:text-[var(--ink)] ${isStreaming ? styles.streamingText : ""}`}>
           {answerSegments.map((seg, i) => {
             if (seg.type === "text") {
               return (
@@ -473,24 +473,10 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
             }}
           />
         )}
-        {isStreaming && (
-          <style jsx>{`
-            .streaming-text :global(p:last-child)::after {
-              content: "▊";
-              animation: blink 0.8s step-end infinite;
-              color: var(--ink);
-              font-weight: normal;
-            }
-            @keyframes blink {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0; }
-            }
-          `}</style>
-        )}
 
         {resp.domain === "schemes" && (
           <div className="mt-3">
-            <Link href="/schemes">
+            <Link to="/schemes">
               <button
                 type="button"
                 className="inline-flex items-center gap-1.5 rounded-[var(--radius-cta)] border border-[var(--ink)]/40 bg-[var(--surface-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition-colors hover:border-[var(--ink)] hover:bg-[var(--surface-card)]"

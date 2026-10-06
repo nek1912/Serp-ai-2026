@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { ChatWindow } from "../ChatWindow";
 import * as api from "@/lib/api";
 import type { Locale } from "@/lib/i18n/i18n";
@@ -8,17 +9,6 @@ import type { Locale } from "@/lib/i18n/i18n";
 let mockLocale: Locale = "en";
 vi.mock("@/lib/i18n/provider", () => ({
   useI18n: () => ({ t: (k: string) => k, locale: mockLocale, setLocale: () => {} }),
-}));
-vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: () => null }),
-  useRouter: () => ({ back: vi.fn(), push: vi.fn() }),
-}));
-vi.mock("next/link", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  default: ({ children, ...rest }: any) => {
-    // Render an anchor so the component tree mounts without a router context.
-    return <a {...rest}>{children}</a>;
-  },
 }));
 vi.mock("@/components/motion/Reveal", () => ({
   // Avoid pulling in gsap/ScrollTrigger (needs matchMedia) for this unit test.
@@ -84,7 +74,7 @@ afterEach(() => {
 
 describe("ChatWindow ui_language_explicit", () => {
   it("first message is NOT marked explicit", async () => {
-    render(<ChatWindow />);
+    render(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
     fireEvent.change(screen.getByPlaceholderText(/chat\.placeholder/i), {
       target: { value: "hello" },
     });
@@ -99,7 +89,7 @@ describe("ChatWindow ui_language_explicit", () => {
   });
 
   it("language switch marks the next message explicit", async () => {
-    const { rerender } = render(<ChatWindow />);
+    const { rerender } = render(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
 
     // Send one message in the default locale so a "last sent locale" exists.
     fireEvent.change(screen.getByPlaceholderText(/chat\.placeholder/i), {
@@ -113,7 +103,7 @@ describe("ChatWindow ui_language_explicit", () => {
     // re-render so ChatWindow reads the new locale (the mock returns it live).
     await act(async () => {
       mockLocale = "hi";
-      rerender(<ChatWindow />);
+      rerender(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
     });
 
     fireEvent.change(screen.getByPlaceholderText(/chat\.placeholder/i), {
@@ -131,12 +121,12 @@ describe("ChatWindow ui_language_explicit", () => {
   });
 
   it("first message after switching away from default (no prior send) is explicit", async () => {
-    const { rerender } = render(<ChatWindow />);
+    const { rerender } = render(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
 
     // Switch to "hi" BEFORE any send (no prior message in another locale).
     await act(async () => {
       mockLocale = "hi";
-      rerender(<ChatWindow />);
+      rerender(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
     });
 
     fireEvent.change(screen.getByPlaceholderText(/chat\.placeholder/i), {
@@ -154,7 +144,7 @@ describe("ChatWindow ui_language_explicit", () => {
   });
 
   it("stays non-explicit when locale is unchanged after a switch", async () => {
-    const { rerender } = render(<ChatWindow />);
+    const { rerender } = render(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
 
     fireEvent.change(screen.getByPlaceholderText(/chat\.placeholder/i), {
       target: { value: "hello" },
@@ -165,7 +155,7 @@ describe("ChatWindow ui_language_explicit", () => {
 
     await act(async () => {
       mockLocale = "hi";
-      rerender(<ChatWindow />);
+      rerender(<MemoryRouter initialEntries={["/chat"]}><ChatWindow /></MemoryRouter>);
     });
 
     // First message after switching -> explicit true
