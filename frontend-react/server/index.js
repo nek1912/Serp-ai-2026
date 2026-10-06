@@ -32,6 +32,24 @@ import { proxySse } from "./sse.js";
  */
 const streamUrl = () => `${BACKEND()}/chat/stream`;
 
+/*
+ * Resolves the outbound auth header, or ends the request.
+ *
+ * authHeader throws AuthUnavailableError when a session exists but Clerk cannot
+ * mint a token for it. Every call site must go through this so the failure is
+ * reported as a 503 auth_unavailable rather than escaping to the terminal
+ * handler as a generic internal_error -- same status, but the body shape is part
+ * of the contract the frontend reads.
+ */
+async function authHeadersOrFail(req, res, extra = {}) {
+  try {
+    return { ...extra, ...(await authHeader(req)) };
+  } catch (err) {
+    res.status(err?.status ?? 503).json({ error: "auth_unavailable" });
+    return null;
+  }
+}
+
 export function createApp() {
   const app = express();
 
@@ -138,9 +156,12 @@ export function createApp() {
       return res.status(400).json({ error: "conversation_id is required" });
     }
 
+    const headers = await authHeadersOrFail(req, res);
+    if (!headers) return;
+
     const upstream = await proxyFetch(
       `/grievances/${encodeURIComponent(conversationId)}/fields?language=${encodeURIComponent(language)}`,
-      { method: "GET", headers: await authHeader(req) },
+      { method: "GET", headers },
     );
 
     if (!upstream) {
@@ -182,11 +203,16 @@ export function createApp() {
     }
     if (!text) return res.status(400).send("Missing text");
 
+    const headers = await authHeadersOrFail(req, res, {
+      "Content-Type": "application/json",
+    });
+    if (!headers) return;
+
     const upstream = await proxyFetch(
       "/voice/speak",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(await authHeader(req)) },
+        headers,
         body: JSON.stringify({ text, language }),
       },
       30000,
@@ -223,11 +249,16 @@ export function createApp() {
       return res.status(400).json({ error: "Missing segments" });
     }
 
+    const headers = await authHeadersOrFail(req, res, {
+      "Content-Type": "application/json",
+    });
+    if (!headers) return;
+
     const upstream = await proxyFetch(
       "/voice/speak",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(await authHeader(req)) },
+        headers,
         body: JSON.stringify({ segments }),
       },
       30000,
