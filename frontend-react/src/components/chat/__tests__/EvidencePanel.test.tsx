@@ -20,6 +20,10 @@ const STATIC_CITATION = {
   source: "static" as const,
   source_label: "Official Document",
   url: "https://pmfby.gov.in/guidelines",
+  // Required for the document link to render: MessageBubble only emits the
+  // "View document" anchor for a static citation when `source_file` is set.
+  // Without it the link branch is skipped entirely and the link is absent.
+  source_file: "pmfby_guidelines.pdf",
   page: 5,
   section: "Eligibility",
   content: "Farmers must apply before the cut-off date.",
@@ -125,22 +129,28 @@ it("clicking citation tag reveals the expanded card's full citation.content", ()
 });
 
 // ── 7. Static evidence works ──────────────────────────────────────────────────
-it("static evidence shows Open Document link", () => {
+// The anchor's label is the localised string t("chat.viewDocument"), which is
+// "View document" in English -- not "Open Document".
+it("static evidence shows a View document link pointing at the PDF proxy", () => {
   renderBubble(makeResp());
   fireEvent.click(screen.getByRole("button", { name: /evidence for citation a0eebc99/i }));
-  const docLink = screen.getByRole("link", { name: /open document/i });
+  const docLink = screen.getByRole("link", { name: /view document/i });
   expect(docLink).toBeTruthy();
-  expect(docLink.getAttribute("href")).toBe("https://pmfby.gov.in/guidelines");
+  // Served through the BFF's PDF proxy, deep-linked to the cited page.
+  expect(docLink.getAttribute("href")).toBe(
+    "/api/documents/pdf/pmfby_guidelines.pdf#page=5",
+  );
 });
 
 // ── 8. Web evidence works ─────────────────────────────────────────────────────
-it("web evidence shows Open Source link after expanding", () => {
+it("web evidence shows a View source link after expanding", () => {
   renderBubble(makeResp());
   fireEvent.click(screen.getByRole("button", { name: /evidence for citation a0eebc99/i }));
-  // Expand the web evidence card by clicking its toggle
-  const webCardToggle = screen.getByRole("button", { name: /web pacs membership rules/i });
+  // Expand the web evidence card by clicking its toggle. Its accessible name is
+  // composed of the "View source" label, the title and the page number.
+  const webCardToggle = screen.getByRole("button", { name: /pacs membership rules/i });
   fireEvent.click(webCardToggle);
-  const srcLink = screen.getByRole("link", { name: /open source/i });
+  const srcLink = screen.getByRole("link", { name: /view source/i });
   expect(srcLink).toBeTruthy();
   expect(srcLink.getAttribute("href")).toBe("https://example.com/pacs-rules");
 });
@@ -149,7 +159,7 @@ it("web evidence shows Open Source link after expanding", () => {
 it("document links open in new tab with noopener", () => {
   renderBubble(makeResp());
   fireEvent.click(screen.getByRole("button", { name: /evidence for citation a0eebc99/i }));
-  const docLink = screen.getByRole("link", { name: /open document/i });
+  const docLink = screen.getByRole("link", { name: /view document/i });
   expect(docLink.getAttribute("target")).toBe("_blank");
   expect(docLink.getAttribute("rel")).toBe("noopener noreferrer");
 });
@@ -166,8 +176,10 @@ it("chunk IDs remain unchanged in the panel after language switching", () => {
 it("URLs remain unchanged after language switching", () => {
   renderBubble(makeResp());
   fireEvent.click(screen.getByRole("button", { name: /evidence for citation a0eebc99/i }));
-  const link = screen.getByRole("link", { name: /open document/i });
-  expect(link.getAttribute("href")).toBe("https://pmfby.gov.in/guidelines");
+  const link = screen.getByRole("link", { name: /view document/i });
+  expect(link.getAttribute("href")).toBe(
+    "/api/documents/pdf/pmfby_guidelines.pdf#page=5",
+  );
 });
 
 // ── 12. Translation receives answer only ───────────────────────────────────────
@@ -237,7 +249,9 @@ it("citation tag is a keyboard-focusable button", () => {
 it("evidence card toggle is a keyboard-focusable button", () => {
   renderBubble(makeResp());
   fireEvent.click(screen.getByRole("button", { name: /evidence for citation a0eebc99/i }));
-  const cardToggle = screen.getByRole("button", { name: "Official Document PMFBY Guidelines p.5" });
+  // The toggle's accessible name is composed from the localised action label
+  // ("View document"), the citation title and the page number.
+  const cardToggle = screen.getByRole("button", { name: /view document.*PMFBY Guidelines/i });
   expect(cardToggle).toBeTruthy();
   expect(cardToggle.tagName).toBe("BUTTON");
   cardToggle.focus();

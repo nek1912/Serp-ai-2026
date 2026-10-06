@@ -48,7 +48,7 @@ describe("hasVoice / pickVoice", () => {
 });
 
 describe("speakSegments", () => {
-  it("falls back to Azure per run and resolves", async () => {
+  it("sends a single run to the backend and resolves", async () => {
     const spy = vi
       .spyOn(api, "fetchVoiceSpeak")
       .mockResolvedValue({ audio: FAKE_HEX, language: "hi" });
@@ -58,10 +58,10 @@ describe("speakSegments", () => {
     expect(spy).toHaveBeenCalledWith([{ text: "नमस्ते", language: "hi" }]);
   });
 
-  it("uses Azure for each language run when no browser voice matches", async () => {
+  it("batches every language run into a single backend call", async () => {
     const spy = vi
       .spyOn(api, "fetchVoiceSpeak")
-      .mockResolvedValue({ audio: FAKE_HEX, language: "hi" });
+      .mockResolvedValue({ audio: FAKE_HEX, language: "en" });
 
     await speakSegments([
       { text: "Hello ", language: "en" },
@@ -69,10 +69,18 @@ describe("speakSegments", () => {
       { text: "नमस्ते", language: "hi" },
     ]);
 
-    // Two distinct runs (en, hi) => two Azure fetches.
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(spy).toHaveBeenCalledWith([{ text: "Hello world", language: "en" }]);
-    expect(spy).toHaveBeenCalledWith([{ text: "नमस्ते", language: "hi" }]);
+    /*
+     * The whole answer is one request. partitionRuns merges the two English
+     * segments into a single run, and the backend's /voice/speak accepts a
+     * `segments` array and handles segmentation itself -- one network round
+     * trip per utterance, not one per language run. The previous expectation of
+     * two calls encoded an older per-run design that the code no longer uses.
+     */
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith([
+      { text: "Hello world", language: "en" },
+      { text: "नमस्ते", language: "hi" },
+    ]);
   });
 });
 
