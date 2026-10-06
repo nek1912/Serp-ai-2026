@@ -1,4 +1,3 @@
-"use client";
 import { useState, useCallback, useMemo } from "react";
 import { useI18n } from "@/lib/i18n/provider";
 import type { ChatResponse } from "@/lib/api";

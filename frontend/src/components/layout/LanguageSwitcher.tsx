@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useEffect } from "react";
 import { LOCALES, type Locale } from "@/lib/i18n/i18n";
 import { useI18n } from "@/lib/i18n/provider";

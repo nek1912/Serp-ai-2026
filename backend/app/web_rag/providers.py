@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -34,7 +35,12 @@ from app.web_rag.tavily_client import (
 )
 
 
-load_dotenv()
+# Point at the repo-root .env explicitly. A bare load_dotenv() resolves `.env`
+# against the process CWD, so it picked up the stale backend/.env when uvicorn
+# runs from backend/ and pushed its values into os.environ — where pydantic
+# gives them priority over the env_file. That is how ALLOWED_ORIGINS reverted to
+# the old Next.js port and every cross-origin browser request was rejected.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 
 DEFAULT_PROVIDERS = "tavily"

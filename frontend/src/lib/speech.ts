@@ -1,4 +1,5 @@
 import { fetchVoiceSpeak, type SpeechSegment } from "./api";
+import { apiFetch } from "./backend";
 
 export type { SpeechSegment };
 
@@ -169,6 +170,7 @@ function playBackendAudio(
 
 async function speakBackendSegments(
   segments: SpeechSegment[],
+  token: number,
 ): Promise<void> {
   const response = await fetchVoiceSpeak(segments);
 
@@ -176,7 +178,16 @@ async function speakBackendSegments(
     throw new Error("Backend TTS returned empty audio");
   }
 
-  const token = _speakToken;
+  /*
+   * Bail out BEFORE creating the Audio element.
+   *
+   * Reading the module-level _speakToken here (instead of using the caller's
+   * token) means a call cancelled while the fetch was in flight re-read the NEW
+   * token, passed the staleness guard in playBackendAudio, created an Audio
+   * element, and then waited forever for an onended that never fires — leaking
+   * the element and leaving the caller's promise pending for good.
+   */
+  if (token !== _speakToken) return;
 
   await playBackendAudio(response.audio, token);
 }
@@ -208,7 +219,7 @@ export async function speakSegments(
   try {
     if (token !== _speakToken) return;
 
-    await speakBackendSegments(runs);
+    await speakBackendSegments(runs, token);
 
     if (token !== _speakToken) return;
 
@@ -365,7 +376,7 @@ function speakBackend(
     formData.append("text", text);
     formData.append("language", locale);
 
-    fetch("/api/speak", {
+    apiFetch("/api/speak", {
       method: "POST",
       body: formData,
     })
@@ -374,14 +385,28 @@ function speakBackend(
           throw new Error(`Speak API ${res.status}`);
         }
 
-        return res.arrayBuffer();
+        /*
+         * FastAPI returns { audio: "<hex>", language } as JSON. The removed BFF
+         * used to do the hex -> binary conversion here and hand back
+         * audio/mpeg, so this used to be res.arrayBuffer(). With the BFF gone
+         * the conversion moves to the browser.
+         */
+        return res.json();
       })
-      .then((buffer) => {
-        if (buffer.byteLength < 100) {
+      .then(({ audio: audioHex }: { audio?: string }) => {
+        if (!audioHex) throw new Error("Backend TTS returned empty audio");
+
+        // FastAPI returns hex; the removed BFF used to convert it to binary.
+        const bytes = new Uint8Array(audioHex.length / 2);
+        for (let i = 0; i < audioHex.length; i += 2) {
+          bytes[i / 2] = parseInt(audioHex.substr(i, 2), 16);
+        }
+
+        if (bytes.byteLength < 100) {
           throw new Error("Audio too small");
         }
 
-        const blob = new Blob([buffer], {
+        const blob = new Blob([bytes], {
           type: "audio/mpeg",
         });
 

@@ -35,9 +35,18 @@ def retrieve(supabase, query_embedding: list[float], domain: str,
     params = {
         "query_embedding": query_embedding, "match_domain": domain,
         "match_state": state, "match_count": k,
+        # Always send these, even when None.
+        #
+        # The database has two overloaded match_chunks signatures: a 4-arg one
+        # and a 6-arg one that adds these two. PostgREST cannot disambiguate
+        # overloads whose leading parameters are identical (PGRST203, "Could not
+        # choose the best candidate function"), so a 4-arg call fails outright
+        # and static retrieval returns nothing — which surfaces to the citizen
+        # as a confident abstention with no visible cause. Naming all six
+        # parameters resolves to exactly one candidate.
+        "as_of_date": as_of_date,
+        "match_entity_id": None,
     }
-    if as_of_date is not None:
-        params["as_of_date"] = as_of_date
     rows = supabase.rpc("match_chunks", params).execute().data or []
     return [RetrievedChunk(
         chunk_id=str(r.get("chunk_id") or r["id"]),

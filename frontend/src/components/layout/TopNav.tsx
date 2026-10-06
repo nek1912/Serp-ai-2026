@@ -1,8 +1,6 @@
-"use client";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef } from "react";
-import { useAuth, UserButton } from "@clerk/nextjs";
+import { useAuth, UserButton } from "@clerk/react";
 import { useI18n } from "@/lib/i18n/provider";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { HamburgerMenu } from "./HamburgerMenu";
@@ -20,7 +18,7 @@ const RIGHT_LINKS = [
 
 export function TopNav() {
   const { t } = useI18n();
-  const pathname = usePathname();
+  const pathname = useLocation().pathname;
   const barRef = useRef<HTMLDivElement>(null);
   const { isSignedIn } = useAuth();
 
@@ -61,7 +59,7 @@ export function TopNav() {
           {/* Left: Logo + primary links */}
           <div className="flex items-center gap-1">
             <Link
-              href="/"
+              to="/"
               className="flex items-center gap-2.5 px-3 py-2"
             >
               <img
@@ -80,7 +78,7 @@ export function TopNav() {
                 return (
                   <Link
                     key={l.href}
-                    href={l.href}
+                    to={l.href}
                     aria-current={isActive ? "page" : undefined}
                     className={`nav-link group relative rounded-full px-3 py-1.5 text-[14px] font-medium transition-colors duration-150 ${
                       isActive
@@ -107,7 +105,7 @@ export function TopNav() {
               return (
                 <Link
                   key={l.href}
-                  href={l.href}
+                  to={l.href}
                   aria-current={isActive ? "page" : undefined}
                   className={`nav-link group relative hidden items-center rounded-full px-3 py-1.5 text-[14px] font-medium transition-colors duration-150 md:flex ${
                     isActive
@@ -128,7 +126,7 @@ export function TopNav() {
             <LanguageSwitcher />
 
             <Link
-              href="/chat"
+              to="/chat"
               className="hidden h-10 items-center justify-center rounded-full bg-[var(--primary)] px-5 text-[14px] font-semibold text-[var(--on-primary)] transition-colors duration-150 hover:bg-[#1a1a1a] md:inline-flex"
             >
               {t("nav.chat")}
@@ -138,7 +136,7 @@ export function TopNav() {
               <UserButton />
             ) : (
               <Link
-                href="/sign-in"
+                to="/sign-in"
                 className="hidden h-10 items-center justify-center rounded-full border border-[var(--hairline)] px-4 text-[14px] font-medium text-[var(--ink)] transition-colors duration-150 hover:bg-[var(--canvas-secondary)] md:inline-flex"
               >
                 {t("nav.signIn") ?? "Sign In"}

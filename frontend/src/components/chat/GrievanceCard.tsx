@@ -1,6 +1,5 @@
-"use client";
 import { useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import type { Grievance } from "@/lib/api";
 import { useI18n } from "@/lib/i18n/provider";
 import {
@@ -37,6 +36,53 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Field keys arrive from the grievance backend as snake_case. Turn them into
+ * human-readable English labels.
+ *
+ * Initialisms must stay uppercase ("application_id" -> "Application ID"). A naive
+ * title-caser produces "Application Id", which reads as a typo to a citizen
+ * filling in a government form, so the initialism set is explicit rather than
+ * guessed.
+ *
+ * Entries are the words that appear as their own segment in real backend field
+ * keys (see backend/app/grievance/field_detector.py). Words that merely CONTAIN
+ * an initialism must not be added: "identity" is not an initialism, and
+ * "aadhaar" is deliberately absent because the backend's own label for it is
+ * "Aadhaar Number", not "AADHAAR".
+ */
+const FIELD_INITIALISMS = new Set([
+  "cibil",
+  "discom",
+  "esi",
+  "fps",
+  "gst",
+  "id",
+  "ifsc",
+  "kcc",
+  "pan",
+  "pf",
+  "pin",
+  "rte",
+  "rto",
+  "rti",
+  "sms",
+  "upi",
+  "url",
+]);
+
+function humanizeFieldKey(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (FIELD_INITIALISMS.has(lower)) return lower.toUpperCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
   if (!value) return null;
   return (
@@ -49,7 +95,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 
 export function GrievanceCard({ grievance }: { grievance: Grievance }) {
   const { t } = useI18n();
-  const router = useRouter();
+  const router = useNavigate();
   const [showEnglishDraft, setShowEnglishDraft] = useState(false);
 
   const location = grievance.location;
@@ -150,7 +196,7 @@ export function GrievanceCard({ grievance }: { grievance: Grievance }) {
                       // sessionStorage unavailable (private mode, etc.) — the
                       // draft page will show its own empty-state in that case.
                     }
-                    router.push("/grievance/draft/view");
+                    router("/grievance/draft/view");
                   }}
                   className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent-primary)] underline decoration-dotted hover:opacity-80"
                 >
@@ -190,7 +236,7 @@ export function GrievanceCard({ grievance }: { grievance: Grievance }) {
               const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
               const i18nKey = `field.${camelKey}`;
               const translated = t(i18nKey as Parameters<typeof t>[0]);
-              const label = translated !== i18nKey ? translated : key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+              const label = translated !== i18nKey ? translated : humanizeFieldKey(key);
               return (
                 <Field
                   key={key}

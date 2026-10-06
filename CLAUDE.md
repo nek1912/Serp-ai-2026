@@ -28,7 +28,8 @@ tells you what's actually built and what the current state is. This file
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Frontend | Next.js 16 + React 19 + Tailwind CSS 4 | PWA, hosted on Vercel |
+| Frontend | React 19 + Vite 8 + React Router 7 + Tailwind CSS 4 | Static SPA in `frontend/`. **Not a PWA** — no manifest, no service worker |
+| Frontend API access | Direct browser → FastAPI | The browser attaches Clerk's session token. `src/lib/backend.ts` owns the URL mapping. Never reintroduce a proxy holding `CLERK_SECRET_KEY` — it is not needed and adds a port to deploy |
 | Backend | FastAPI (Python ≥3.11) on Render Free | `uvicorn app.main:app` |
 | DB + vectors | Supabase Postgres + pgvector (HNSW cosine) | 768d embeddings |
 | Embeddings | Jina Embeddings v3 (primary) | 768d, task-typed |
@@ -67,12 +68,22 @@ GET  /health
 GET  /health/providers
 ```
 
+The frontend calls FastAPI **directly** from the browser and attaches Clerk's
+own session token as `Authorization: Bearer`. There is no proxy server and no
+second port. `src/lib/backend.ts` owns the base URL, the legacy `/api/*` →
+FastAPI path mapping, and the bearer header; `App.tsx` registers Clerk's
+`useAuth().getToken` there once at mount.
+
+Because requests are cross-origin, `ALLOWED_ORIGINS` in the repo-root `.env`
+must list the frontend's origin. `CLERK_ISSUER` there must match the frontend's
+Clerk instance — if they diverge, every authenticated call 401s.
+
 Chat request: `{ question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }`  
 Language values: `"en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"`
 
 Chat response: `{ answer, language, domain, intent, entities, confidence, confidence_level, citations, abstained, speech_text, speech_segments, follow_up_question, mode, conversation_id }`
 
-SSE events: `thinking | token | metadata | done`
+SSE events: `thinking | step | token | metadata | done | error`
 
 ---
 
@@ -82,8 +93,8 @@ SSE events: `thinking | token | metadata | done`
   no bare `except`.
 - Every external provider call goes through an adapter with explicit timeout and
   fallback handling — never call a provider SDK directly from route handlers.
-- Never put API keys in frontend code, commit them, or expose via `NEXT_PUBLIC_*`.
-  Backend environment variables only.
+- Never put API keys in frontend code or commit them. Only `VITE_`-prefixed vars reach the browser bundle; `CLERK_SECRET_KEY` is read only by the backend.
+  Backend environment variables only. `CLERK_SECRET_KEY` and `CLERK_ISSUER` stay in the repo-root `.env`; a stale `backend/.env` is ignored with a warning.
 - Structured logs. Never log API keys, auth tokens, or full grievance PII.
 - Write tests for: domain routing, jurisdiction filtering, retrieval, citation
   validity, abstention, grievance workflow, provider fallback.
@@ -100,7 +111,7 @@ SSE events: `thinking | token | metadata | done`
 - ✅ StaticRAGService — Supabase pgvector hybrid retrieval (dense + lexical RRF)
 - ✅ WebRAGService — 10-step pipeline (Tavily/SerpApi-Google/Firecrawl → BM25 → Gemini rerank → verify) + ≤2 single-axis recovery rounds with cooperative deadline (no new round past `started + web_rag_timeout_s`)
 - ✅ Evidence gate, citation verifier, abstention
-- ✅ 11-language frontend (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML) with chat, grievance, schemes, library pages
+- ✅ 11-language frontend (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML) with chat, grievance, schemes, library pages. Coverage is incomplete: 791 of 3,740 strings untranslated (`npm run i18n:coverage`); missing keys fall back to English
 - ✅ Document ingestion: 11 docs, 4778 chunks (pacs_governance, pacs_computerization, pmfby, financial_inclusion)
 - ✅ Grievance localization — `FIELD_PROMPTS` (30 prompts), `SUBMISSION_STEPS`, `FOLLOWUP_PREFIX`, `WORKFLOW_PREFIX` maps in `translations.py`; `translate_field_prompt()` for field questions; frontend field card labels via `dictionaries.ts` i18n lookup
 

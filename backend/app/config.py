@@ -1,10 +1,46 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _env_file() -> str:
+    """
+    Locate the real .env regardless of the directory uvicorn was launched from.
+
+    pydantic-settings resolves a relative `env_file` against the process CWD, so
+    `env_file=".env"` silently picked up a DIFFERENT file depending on whether
+    you ran `uvicorn app.main:app` from backend/ or `uvicorn app.main:app
+    --app-dir backend` from the repo root. A stale backend/.env was shadowing
+    the repo-root one, which is how ALLOWED_ORIGINS stayed on the old Next.js
+    port and CLERK_ISSUER stayed on an old Clerk instance — every authenticated
+    request 401'd with no obvious cause.
+
+    The repo root is authoritative. A leftover backend/.env is reported loudly
+    rather than read, because silently merging two files with conflicting keys is
+    how this went wrong in the first place.
+    """
+    here = Path(__file__).resolve()
+    repo_root = here.parent.parent.parent / ".env"   # backend/app/config.py -> repo root
+    backend_local = here.parent.parent / ".env"      # backend/.env
+
+    if backend_local.exists() and backend_local != repo_root:
+        import warnings
+
+        warnings.warn(
+            f"Ignoring stale {backend_local}. Configuration is read from "
+            f"{repo_root}. Delete backend/.env, or copy your changes into the "
+            "repo-root .env, otherwise the two will keep disagreeing.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return str(repo_root)
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Absolute path to the repo-root .env — never relative to CWD.
+    model_config = SettingsConfigDict(env_file=_env_file(), extra="ignore")
     groq_api_key: str
     gemini_api_key: str = ""
     jina_api_key: str = ""

@@ -236,6 +236,12 @@ def _dense_retrieve(supabase, query_embedding: list[float], domain: str,
         "match_domain": domain,
         "match_state": state,
         "match_count": k,
+        # Named explicitly to disambiguate the two overloaded match_chunks
+        # signatures in the database. See app/retrieval/__init__.py: PostgREST
+        # raises PGRST203 on a 4-arg call, which silently zeroed out static
+        # retrieval and made every answer abstain.
+        "as_of_date": None,
+        "match_entity_id": None,
     }).execute().data or []
     return [
         RetrievedChunk(
