@@ -329,7 +329,9 @@ class RAGOrchestrator:
             answer = self._auto_append_citations(answer, all_chunks, force=True)
             citation_verification = verify_citations(answer, all_chunk_ids)
 
-            if not citation_verification.is_valid and not all_chunks:
+            # Persistent citation failure is a safe failure even when chunks
+            # exist: the generated markers do not map to retrieved evidence.
+            if not citation_verification.is_valid:
                 return self._abstain_response(
                     lang=lang,
                     reason=citation_verification.reason or AbstentionReason.CITATION_FAILURE,
@@ -337,7 +339,10 @@ class RAGOrchestrator:
                     session_id=session_id,
                 )
 
-        # Step 9.5: Post-generation grounding check
+        # Step 9.5: Post-generation grounding check (enforcing, not advisory).
+        # Unsupported factual claims must not survive into a HIGH-confidence
+        # answer: deterministically repair using existing evidence, re-verify,
+        # and safe-abstain if claims persist or nothing supportable remains.
         _t_grounding_start = time.monotonic()
         grounding_result = verify_answer_grounding(
             answer,
@@ -351,17 +356,44 @@ class RAGOrchestrator:
                 len(grounding_result.unsupported_claims),
                 [c.claim_text for c in grounding_result.unsupported_claims],
             )
-            # Remove unsupported claims from answer
-            for claim in grounding_result.unsupported_claims:
-                # Try to remove the sentence containing the unsupported claim
-                # Simple approach: remove the claim text and surrounding context
-                answer = re.sub(
-                    rf"[^.]*\b{re.escape(claim.claim_text)}\b[^.]*\.",
-                    "",
-                    answer,
+            repaired = self._repair_unsupported_claims(
+                answer, grounding_result.unsupported_claims,
+            )
+            recheck = verify_answer_grounding(
+                repaired,
+                all_chunks,
+                use_llm_verification=self._settings.answer_grounding_llm_enabled,
+                settings=self._settings,
+            )
+            if recheck.has_unsupported_claims:
+                logger.warning(
+                    "Grounding repair incomplete, %d claim(s) still unsupported: %s — abstaining",
+                    len(recheck.unsupported_claims),
+                    [c.claim_text for c in recheck.unsupported_claims],
                 )
-            # Clean up extra spaces
-            answer = re.sub(r'  +', ' ', answer).strip()
+                return self._abstain_response(
+                    lang=lang,
+                    reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                    domain=domain,
+                    session_id=session_id,
+                )
+            cleaned_repaired, _ = strip_citations(repaired)
+            if not cleaned_repaired.strip():
+                logger.warning(
+                    "Grounding repair left no supportable answer — abstaining",
+                )
+                return self._abstain_response(
+                    lang=lang,
+                    reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                    domain=domain,
+                    session_id=session_id,
+                )
+            logger.info(
+                "Grounding repair removed %d unsupported claim(s); re-check clean",
+                len(grounding_result.unsupported_claims),
+            )
+            answer = repaired
+            grounding_result = recheck
         grounding_ms = (time.monotonic() - _t_grounding_start) * 1000
 
         if on_step:
@@ -472,6 +504,7 @@ class RAGOrchestrator:
                     self._static_rag.retrieve,
                     embedding=embedding, query=english_query,
                     domain=domain, state=state,
+                    as_of_date=as_of_date,
                 )
             except Exception:
                 logger.exception("Static RAG pipeline failed")
@@ -522,6 +555,7 @@ class RAGOrchestrator:
                 self._static_rag.retrieve,
                 embedding=embedding, query=english_query,
                 domain=domain, state=state,
+                as_of_date=as_of_date,
             )
             result.metadata["retrieval_ms"] = (time.monotonic() - started) * 1000
             return result
@@ -669,6 +703,26 @@ class RAGOrchestrator:
             answer = answer.rstrip() + " " + " ".join(citation_parts)
 
         return answer
+
+    @staticmethod
+    def _repair_unsupported_claims(answer: str, unsupported_claims: list) -> str:
+        """Deterministically remove sentences containing unsupported claims.
+
+        Reuses the pre-existing sentence-removal repair (no LLM call).
+        Operates on the actual extracted claims, not arbitrary words.
+        """
+        for claim in unsupported_claims:
+            claim_text = getattr(claim, "claim_text", str(claim))
+            if not claim_text.strip():
+                continue
+            # Remove the sentence containing the unsupported claim.
+            answer = re.sub(
+                rf"[^.]*\b{re.escape(claim_text)}\b[^.]*\.",
+                "",
+                answer,
+            )
+        # Clean up extra spaces
+        return re.sub(r"  +", " ", answer).strip()
 
     def _build_citations(
         self,

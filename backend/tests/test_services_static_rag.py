@@ -131,6 +131,7 @@ class TestRetrieval:
             )
             mock_retrieve.assert_called_once_with(
                 mock_db.return_value, embedding, "What is PMFBY?", "pmfby", "gujarat", k=10,
+                as_of_date=None,
             )
 
     def test_default_k_without_reranker(self):

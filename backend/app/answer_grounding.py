@@ -82,11 +82,22 @@ def _extract_numbers(text: str) -> list[str]:
 
 
 def _extract_dates(text: str) -> list[str]:
-    """Extract all dates from text."""
+    """Extract all dates from text.
+
+    The month-name pattern also matches bare words (e.g. the modal verb
+    "may" matches month "May" case-insensitively). A bare month word with
+    no digits is not a verifiable factual claim, so only matches
+    containing at least one digit are kept. Real dates ("15 April 2025",
+    "31 March") always contain digits and are unaffected.
+    """
     dates = _DATE_PATTERN.findall(text)
     dates.extend(_DATE_PATTERN_ALT.findall(text))
     dates.extend(_DATE_PATTERN_ISO.findall(text))
-    return [d.strip() for d in dates if d.strip()]
+    return [
+        d.strip()
+        for d in dates
+        if d.strip() and any(ch.isdigit() for ch in d)
+    ]
 
 
 def _extract_entities(text: str) -> list[str]:
