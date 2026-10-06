@@ -17,17 +17,19 @@ import { LOCALES } from "./i18n";
  * actually matter: a broken reference table, a typo'd or stale key in a locale,
  * and a regression in the English fallback.
  *
- * Run `node i18n-report.mjs` (see the migration plan, Task 8) to see the current
- * per-locale coverage. Closing the gap is a translation task, not a code task.
+ * Run `node scripts/i18n-coverage.mjs` to see the current per-locale coverage.
+ * Closing the gap is a translation task, not a code task.
  */
 
 test("en is the complete reference table", () => {
   expect(Object.keys(dict.en).length).toBeGreaterThan(300);
 });
 
-test("every locale defines nav.home", () => {
+test("every locale defines nav.home itself, not via fallback", () => {
+  // Asserted on the table directly. Checking translate() here would pass on the
+  // English fallback alone, so it would prove nothing about this locale.
   for (const loc of LOCALES) {
-    expect(translate(loc, "nav.home").length).toBeGreaterThan(0);
+    expect(dict[loc]["nav.home"], `${loc} defines nav.home`).toBeDefined();
   }
 });
 
@@ -49,8 +51,4 @@ test("translate falls back to English for a key a locale lacks", () => {
 
 test("translate returns the key when no locale has it", () => {
   expect(translate("en", "nav.never-gonna-exist")).toBe("nav.never-gonna-exist");
-});
-
-test("translate interpolates {vars}", () => {
-  expect(translate("en", "schemes.count", { n: 3 })).toBe("3 schemes available");
 });

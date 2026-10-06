@@ -34,7 +34,15 @@ const rows = [];
 
 for (const loc of LOCALES.slice(1)) {
   const set = keysOf(loc);
-  if (!set) continue;
+  // Fail loudly rather than silently dropping a locale from the totals.
+  if (!set) {
+    console.error(
+      `\nERROR: could not locate \`const ${loc}\` in dictionaries.ts. ` +
+        `Its coverage is EXCLUDED from the totals below, which would flatter the result.`,
+    );
+    process.exitCode = 1;
+    continue;
+  }
   const missing = [...en].filter((k) => !set.has(k));
   totalMissing += missing.length;
   const pct = ((set.size / en.size) * 100).toFixed(1);

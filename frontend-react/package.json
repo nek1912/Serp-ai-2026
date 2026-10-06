@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "cross-env NODE_ENV=production node --env-file-if-exists=.env server/index.js",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "i18n:coverage": "node scripts/i18n-coverage.mjs"
   },
   "dependencies": {
     "@clerk/react": "^6.17.5",
