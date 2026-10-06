@@ -66,10 +66,11 @@ Evidence-grounded, multilingual citizen-assistance platform for cooperative gove
           +-----------+        +-----------+
           v                               v
  +------------------+          +--------------------+
- | StaticRAGService |          | WebRAGService      |
- | Supabase pgvec.  |          | 10-step pipeline   |
- | hybrid retrieval |          | Tavily/Firecrawl   |
- | (dense + lexical |          | BM25 → Gemini pre- |
+  | StaticRAGService |          | WebRAGService      |
+  | Supabase pgvec.  |          | 10-step pipeline   |
+  | hybrid retrieval |          | Tavily/SerpApi/    |
+  | (dense + lexical |          | Firecrawl          |
+  |  RRF fusion)     |          | BM25 → Gemini pre- |
  |  RRF fusion)     |          | rank → RRF →       |
  | EvidenceChunks   |          | Gemini final-rank  |
  +------------------+          | → source verify    |
@@ -109,9 +110,10 @@ Evidence-grounded, multilingual citizen-assistance platform for cooperative gove
 ## 3. Request flow: `/chat` and `/chat/stream`
 
 ```
-POST /chat (or /chat/stream for SSE)
+POST /chat (or /chat/stream for SSE)   [requires Clerk JWT → 401 without it]
   │
-  ├── resolve_and_remember()      → detect/remember response language (en/hi/gu/mr/bn/ta)
+  ├── require_auth()                → verify Clerk session JWT, else 401
+  ├── resolve_and_remember()      → detect/remember response language (en/hi/gu/mr/bn/ta/te/kn/pa/or/ml)
   ├── detect_query_languages()    → dominant language + language_mix
   ├── _translate_to_english()     → Sarvam (primary) → Azure (fallback)
   ├── get_embedding_provider().embed_texts()  → 768d Jina v3 embedding
@@ -140,8 +142,11 @@ POST /chat (or /chat/stream for SSE)
   └─[else RAG path]─────────────────────────────────────────────────────────►│
       RAGOrchestrator.run()                                                   │
         ├── asyncio.gather:                                                   │
-        │     StaticRAGService.retrieve()  → Supabase pgvector hybrid         │
-        │     WebRAGService.retrieve()     → Tavily/Firecrawl 10-step         │
+  │     StaticRAGService.retrieve()  → Supabase pgvector hybrid         │
+  │     WebRAGService.retrieve(deadline=started+web_rag_timeout_s)            │
+  │       → Tavily/SerpApi-Google/Firecrawl 10-step + ≤2 recovery rounds;     │
+  │       no NEW recovery round starts past the deadline (asyncio               │
+  │       cancellation cannot stop the worker thread)                           │
         ├── EvidenceController.build_bundle()                                 │
         ├── EvidenceController.build_curated_prompt()                         │
         ├── grounded_answer(GroqLLMProvider, GeminiLLMProvider, ...)          │
@@ -196,7 +201,7 @@ Events emitted in order:
 
 `pacs_governance | pacs_computerization | pmfby | financial_inclusion | schemes | agriculture | grievance | out_of_scope`
 
-Classification: keyword rules first (instant, case-insensitive); fallback to cosine similarity of 768d anchor embeddings (floor 0.30 → `out_of_scope`).
+Classification: keyword rules first (instant, case-insensitive); fallback to cosine similarity of 768d anchor embeddings (floor 0.20 → `out_of_scope`).
 
 Domain alias mapping in StaticRAGService:
 - `pacs` → `pacs_governance`
@@ -258,16 +263,18 @@ Optional Jina reranker wired after step 2, **currently disabled** (`RERANKER_ENA
 
 ---
 
-## 9. Web RAG pipeline (WebRAGService) — 10 steps
+## 9. Web RAG pipeline (WebRAGService) — 10 steps + bounded recovery
 
-1. **Domain scope gate** — abstain if domain unsupported or "general"
-2. **Web discovery** — `WebDiscoveryService` via Tavily / Firecrawl
+Recovery (after step 10 abstains): at most `MAX_RECOVERY_ROUNDS=2` single-axis rounds (`recovery.py`: jurisdiction/validity/authority/language/facet), one full discover + steps 3–10 each. Cooperative deadline: `retrieve(deadline)` is passed `started + web_rag_timeout_s` by the orchestrator; no NEW round starts past it, so a late success is never computed after fallback. Thresholds, RRF, BM25, verifier unchanged.
+
+1. **Domain scope gate** — abstain if domain unsupported (`DOMAIN_MISMATCH`); `"general"` proceeds (internal classifier may refine)
+2. **Web discovery** — `WebDiscoveryService` via Tavily / SerpApi Google / Firecrawl (bounded concurrent branches × concurrent provider fan-out)
 3. **BM25 ranking** — `BM25Retriever`, top 15
 4. **Gemini pre-ranking** — `GeminiReranker.pre_rank()`, top 15
 5. **RRF fusion** — fuse BM25 + Gemini pre-rank lists
 6. **Gemini final reranking** — `GeminiReranker.final_rerank()`, top 8
 7. **Relevance gate** — minimum score threshold 40.0
-8. **Source verification** — `SourceVerifier`, trust score ≥ 35.0
+8. **Source verification** — `SourceVerifier` (class default trust ≥ 35.0; `WebRAGService` constructs it with 20.0)
 9. **Evidence threshold** — abstain if no accepted sources
 10. **Convert to EvidenceChunks** → unified `evidence_gate()`
 
@@ -372,7 +379,7 @@ _grievance_message()
 - `GrievanceCard`: disclaimer, buttons use `t()`
 - `GrievanceFlow`: wizard submit uses `t("grievanceWizard.submitting")`
 
-**Supported languages:** `en | hi | gu | mr | bn | ta` — same as chat.
+**Supported languages:** `en | hi | gu | mr | bn | ta | te | kn | pa | or | ml` — same as chat.
 
 ---
 

@@ -27,6 +27,9 @@ from dotenv import load_dotenv
 from app.web_rag.firecrawl_client import (
     FirecrawlClient,
 )
+from app.web_rag.serpapi_client import (
+    SerpApiClient,
+)
 from app.web_rag.tavily_client import (
     TavilyClient,
 )
@@ -46,6 +49,7 @@ DEFAULT_PROVIDERS = "tavily"
 _PROVIDER_FACTORIES = {
     "tavily": lambda: TavilyClient(),
     "firecrawl": lambda: FirecrawlClient(),
+    "serpapi": lambda: SerpApiClient(),
 }
 
 

@@ -18,7 +18,8 @@ afterEach(() => {
  * the backend origin.
  */
 test("backendPath maps BFF paths onto FastAPI routes", () => {
-  expect(backendPath("/api/chat")).toBe("/chat/stream");
+  // /api/chat is the non-streaming JSON route; only /api/chat/stream is SSE.
+  expect(backendPath("/api/chat")).toBe("/chat");
   expect(backendPath("/api/chat/stream")).toBe("/chat/stream");
   expect(backendPath("/api/grievance/detect")).toBe("/grievances");
   expect(backendPath("/api/grievance/answer")).toBe("/grievances/answer");

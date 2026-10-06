@@ -722,6 +722,7 @@ def _abstain(lang: str, session_id: str | None = None) -> dict:
         "speech_segments": [],
         "follow_up_question": None,
         "mode": "dual_rag", "conversation_id": session_id or "",
+        "referral": None,
     }
 
 
@@ -741,6 +742,10 @@ def _rag_response_to_dict(resp, lang: str, session_id: str) -> dict:
         "follow_up_question": resp.follow_up_question,
         "mode": resp.mode,
         "conversation_id": session_id,
+        # P1-5: structured referral on unresolved abstention (None when
+        # answered or when no authority is confidently known). Additive:
+        # existing clients ignore unknown keys; no frontend change needed.
+        "referral": getattr(resp, "referral", None),
     }
 
 
@@ -886,6 +891,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 "follow_up_question": None,
                 "mode": "grievance",
                 "conversation_id": req.session_id,
+                "referral": None,
             }
             if grievance_result.grievance:
                 _speech_src = build_grievance_speech_text(
@@ -936,6 +942,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 "follow_up_question": None,
                 "mode": "grievance",
                 "conversation_id": req.session_id,
+                "referral": None,
             }
             if grievance_result.grievance:
                 _speech_src2 = build_grievance_speech_text(
@@ -983,6 +990,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 "follow_up_question": None,
                 "mode": "grievance",
                 "conversation_id": req.session_id,
+                "referral": None,
             }
             if grievance_result.grievance:
                 _speech_src3 = build_grievance_speech_text(
@@ -1022,6 +1030,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 "speech_segments": segment_speech(abstain_msg, ctx.lang),
                 "follow_up_question": None,
                 "mode": "dual_rag", "conversation_id": req.session_id,
+                "referral": None,
             }
 
         # ── Core RAG via orchestrator ────────────────────────────────────
@@ -1038,6 +1047,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
             session_id=req.session_id,
             language_mix=ctx.language_mix,
             pipeline_mode=req.mode,
+            as_of_date=req.as_of_date,
         )
 
         # The LLM is instructed to respond in the user's language directly.
@@ -1390,6 +1400,7 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
                 session_id=req.session_id,
                 language_mix=ctx.language_mix,
                 pipeline_mode=req.mode,
+                as_of_date=req.as_of_date,
             )
 
             # Keep the final language conversion at one explicit response boundary.

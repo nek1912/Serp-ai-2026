@@ -44,6 +44,7 @@ from app.services.web_rag import WebRAGService
 from app.speech_text import prepare_speech_text, segment_speech
 from app.ui import get_abstain_text
 from app.web_rag.query_classifier import QueryClassification
+from app.web_rag.referrals import build_referral
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ class RAGOrchestrator:
         model_override: str | None = None,
         pipeline_mode: str | None = None,
         on_step: Callable[[dict], None] | None = None,
+        as_of_date: str | None = None,
     ) -> RAGResponse:
         """Execute the full async dual-pipeline RAG flow.
 
@@ -193,6 +195,7 @@ class RAGOrchestrator:
             state=state,
             classification=classification,
             mode=pipeline_mode or "rag_web",
+            as_of_date=as_of_date,
         )
         web_total_ms = float(web_result.metadata.get("web_total_ms", 0.0))
 
@@ -213,13 +216,22 @@ class RAGOrchestrator:
             len(web_result.chunks), web_result.abstained,
         )
 
-        # Step 3: If both pipelines abstained, return abstain response
+        # Step 3: If both pipelines abstained, return abstain response.
+        # P1-5: attach a structured referral (jurisdiction + competent
+        # authority/channel from the mandate map when confidently known).
+        # The gate already abstained — the referral never bypasses it.
         if not has_static and not has_web:
+            referral = build_referral(
+                classification,
+                web_result.metadata.get("evidence_state"),
+                web_result.metadata.get("uncovered_facets"),
+            )
             return self._abstain_response(
                 lang=lang,
                 reason=static_result.reason or web_result.reason or AbstentionReason.NO_ELIGIBLE_SOURCE,
                 domain=domain,
                 session_id=session_id,
+                referral=referral,
             )
 
         # Step 4: Build evidence bundle
@@ -288,8 +300,21 @@ class RAGOrchestrator:
         all_chunks = self._merge_evidence(static_result.chunks, web_result.chunks)
         answer = self._auto_append_citations(answer, all_chunks)
 
-        # Step 9: Verify citations against evidence, with auto-repair
-        all_chunk_ids = [chunk.chunk_id for chunk in all_chunks]
+        # Step 9: Verify citations against evidence, with auto-repair.
+        # P1-1/P1-6: lead-only and quarantined chunks are not citable —
+        # their IDs are excluded so LLM markers pointing at them fail
+        # verification and are repaired away like any invalid prefix.
+        all_chunk_ids = [
+            chunk.chunk_id
+            for chunk in all_chunks
+            if not (chunk.metadata or {}).get("lead_only")
+            and not (
+                isinstance((chunk.metadata or {}).get("impersonation"), dict)
+                and (chunk.metadata or {}).get("impersonation", {}).get(
+                    "suspicious"
+                )
+            )
+        ]
         citation_verification = verify_citations(answer, all_chunk_ids)
         if not citation_verification.is_valid:
             logger.warning(
@@ -425,6 +450,7 @@ class RAGOrchestrator:
         state: str | None,
         classification: QueryClassification | None,
         mode: str | None = None,
+        as_of_date: str | None = None,
     ) -> tuple[RAGResult, RAGResult]:
         """Run static and/or web RAG pipelines based on mode.
 
@@ -459,12 +485,18 @@ class RAGOrchestrator:
         # Web-only mode (V2)
         if mode == "web":
             started = time.monotonic()
+            # Cooperative deadline (see _web_with_timeout below): the sync
+            # WebRAG worker cannot be preempted on timeout, so it gets the
+            # absolute budget to stop starting new recovery rounds in time.
+            deadline = started + self._settings.web_rag_timeout_s
             try:
                 web_result = await asyncio.wait_for(
                     asyncio.to_thread(
                         self._web_rag.retrieve,
                         query=english_query, domain=domain,
                         state=state, classification=classification,
+                        as_of_date=as_of_date,
+                        deadline=deadline,
                     ),
                     timeout=self._settings.web_rag_timeout_s,
                 )
@@ -495,15 +527,24 @@ class RAGOrchestrator:
             return result
 
         static_coro = _static_with_timing()
-        web_coro = asyncio.to_thread(
-            self._web_rag.retrieve,
-            query=english_query, domain=domain,
-            state=state, classification=classification,
-        )
 
         # Keep Web RAG optional: static evidence must continue within a bounded budget.
         async def _web_with_timeout() -> RAGResult:
             started = time.monotonic()
+            # Cooperative deadline for the sync WebRAG worker: cancelling
+            # the asyncio task on timeout does NOT stop the to_thread
+            # worker (it keeps running recovery rounds in the background
+            # and its late result is discarded). Handing it the absolute
+            # budget lets it stop STARTING new recovery rounds once the
+            # caller has given up, instead of computing a phantom success.
+            deadline = started + self._settings.web_rag_timeout_s
+            web_coro = asyncio.to_thread(
+                self._web_rag.retrieve,
+                query=english_query, domain=domain,
+                state=state, classification=classification,
+                as_of_date=as_of_date,
+                deadline=deadline,
+            )
             try:
                 web_task = asyncio.create_task(web_coro)
                 try:
@@ -611,6 +652,14 @@ class RAGOrchestrator:
         seen: set[str] = set()
         citation_parts: list[str] = []
         for chunk in chunks[:3]:
+            metadata = chunk.metadata or {}
+            if metadata.get("lead_only"):
+                continue
+            impersonation = metadata.get("impersonation")
+            if isinstance(impersonation, dict) and impersonation.get(
+                "suspicious"
+            ):
+                continue
             short_id = chunk.chunk_id[:8]
             if short_id not in seen:
                 seen.add(short_id)
@@ -625,11 +674,27 @@ class RAGOrchestrator:
         self,
         chunks: list[EvidenceChunk],
     ) -> list[dict]:
-        """Build the citations list for the API response."""
+        """Build the citations list for the API response.
+
+        P1-1/P1-6: chunks tagged ``lead_only`` (secondary leads) or
+        quarantined by impersonation screening are never authoritative
+        evidence and are excluded here. Everything else is unchanged.
+        """
         citations: list[dict] = []
         seen: set[str] = set()
 
         for chunk in chunks:
+            metadata = chunk.metadata or {}
+
+            if metadata.get("lead_only"):
+                continue
+
+            impersonation = metadata.get("impersonation")
+            if isinstance(impersonation, dict) and impersonation.get(
+                "suspicious"
+            ):
+                continue
+
             short_id = chunk.chunk_id[:8]
             if short_id in seen:
                 continue
@@ -719,6 +784,7 @@ class RAGOrchestrator:
         reason: AbstentionReason,
         domain: str,
         session_id: str,
+        referral: dict | None = None,
     ) -> RAGResponse:
         """Build a standardized abstention response."""
         answer = get_abstain_text(lang)
@@ -735,4 +801,5 @@ class RAGOrchestrator:
             follow_up_question=None,
             mode="dual_rag",
             conversation_id=session_id,
+            referral=referral,
         )

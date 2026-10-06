@@ -63,7 +63,16 @@ export async function authHeaders(): Promise<Record<string, string>> {
  * FastAPI actually serves.
  */
 const PATH_MAP: Record<string, string> = {
-  "/api/chat": "/chat/stream",
+  /*
+   * /api/chat is the NON-streaming JSON route; /api/chat/stream is SSE.
+   *
+   * Upstream corrected this in the Next.js handlers (it had been streaming
+   * both), so the mapping follows: sendChat() in api.ts does r.json() against a
+   * typed ChatResponse and could never have worked against an SSE body.
+   * The live UI uses sendChatStream(), so this is contract accuracy rather than
+   * a behaviour change.
+   */
+  "/api/chat": "/chat",
   "/api/chat/stream": "/chat/stream",
   "/api/grievance/detect": "/grievances",
   "/api/grievance/answer": "/grievances/answer",

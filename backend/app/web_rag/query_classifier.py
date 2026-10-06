@@ -38,6 +38,7 @@ Supported intents:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -49,14 +50,29 @@ class QueryClassification:
     state: Optional[str]
     intent: str
     confidence: float
+    # P0-1 jurisdiction resolution (all optional/backward-compatible).
+    # district: canonical district name (Gujarat district list) or None.
+    district: Optional[str] = None
+    # society_type: "mscs" (Multi-State) | "state_society" | None (unknown).
+    society_type: Optional[str] = None
+    # case_year: explicit 4-digit year mentioned in the query, if any.
+    case_year: Optional[int] = None
+    # season: "kharif" | "rabi" | "zaid" if explicitly mentioned, else None.
+    season: Optional[str] = None
+    # jurisdiction_source: "explicit" | "session" | "subject_default" | "none".
+    jurisdiction_source: str = "none"
+    # assumed_state: True when state did NOT come from an explicit query
+    # signal (session/default fallback). Downstream answers must disclose it.
+    assumed_state: bool = False
 
 
 DOMAIN_KEYWORDS = {
     "pmfby": [
         "pmfby",
         "fasal bima",
-        "crop insurance",
-        "pradhan mantri fasal",
+        "pak vimo",
+        "pak vima",
+        "crop insurance",        "pradhan mantri fasal",
         "crop insurance scheme",
         "crop damage",
         "crop loss",
@@ -83,6 +99,8 @@ DOMAIN_KEYWORDS = {
     ],
     "pacs": [
         "pacs",
+        "mandli",
+        "seva sahkari mandli",
         "primary agricultural credit society",
         "primary agriculture credit society",
         "credit cooperative",
@@ -109,12 +127,16 @@ DOMAIN_KEYWORDS = {
         "கூட்டுறவு சங்கம்",
     ],
     "pacs_computerization": [
+        # NOTE: the "ict" acronym was removed (audit): as a substring it
+        # fires inside core vocabulary ("district", "predict", "victim"),
+        # hijacking unrelated queries into an unsupported domain and
+        # causing wrong abstentions. Remaining keywords cover genuine
+        # computerization queries.
         "computerization",
         "digitization",
         "digital pacs",
         "pacspl",
         "ncip",
-        "ict",
         "erp",
         "pmu",
         "micro-atm",
@@ -127,12 +149,16 @@ DOMAIN_KEYWORDS = {
         "co-operative",
         "cooperative society",
         "cooperative law",
+        "mscs",
+        "crcs",
         "bylaws",
         "by-laws",
         "member rights",
         "society registration",
         "cooperative training",
         "sahakari",
+        "chutni",
+        "chuntni",
         "सहकारी",
         "समिति",
         "સહકારી",
@@ -143,6 +169,8 @@ DOMAIN_KEYWORDS = {
     "schemes": [
         "scheme",
         "yojana",
+        "pmjjby",
+        "pmsby",
         "ministry of cooperation",
         "government scheme",
         "subsidy",
@@ -190,6 +218,9 @@ DOMAIN_KEYWORDS = {
         "msp",
         "kisan",
         "khedut",
+        "krushi",
+        "krishi",
+        "rahat",
         "किसान",
         "खेती",
         "फसल",
@@ -258,6 +289,9 @@ DOMAIN_KEYWORDS = {
         "grievance",
         "complaint",
         "complain",
+        "escalate",
+        "escalation",
+        "fraud",
         "appeal",
         "dispute",
         "redressal",
@@ -404,6 +438,9 @@ INTENT_KEYWORDS = {
         "grievance",
         "complaint",
         "complain",
+        "escalate",
+        "escalation",
+        "fraud",
         "appeal",
         "dispute",
         "redressal",
@@ -564,10 +601,131 @@ STATE_KEYWORDS = {
 }
 
 
+# P0-1: Gujarat district signals. Canonical name -> keyword variants
+# (English lowercase names plus standard Gujarati-script forms, which are
+# proper nouns rather than legal terminology).
+GUJARAT_DISTRICTS = {
+    "Ahmedabad": ["ahmedabad", "અમદાવાદ"],
+    "Amreli": ["amreli", "અમરેલી"],
+    "Anand": ["anand", "આણંદ"],
+    "Aravalli": ["aravalli", "aravali", "અરવલ્લી"],
+    "Banaskantha": ["banaskantha", "બનાસકાંઠા"],
+    "Bharuch": ["bharuch", "ભરૂચ"],
+    "Bhavnagar": ["bhavnagar", "ભાવનગર"],
+    "Botad": ["botad", "બોટાદ"],
+    "Chhota Udaipur": ["chhota udaipur", "chhota udepur", "છોટા ઉદેપુર"],
+    "Dahod": ["dahod", "દાહોદ"],
+    "Dang": ["dang", "ડાંગ"],
+    "Devbhoomi Dwarka": ["devbhoomi dwarka", "dwarka", "દેવભૂમિ દ્વારકા", "દ્વારકા"],
+    "Gandhinagar": ["gandhinagar", "ગાંધીનગર"],
+    "Gir Somnath": ["gir somnath", "somnath", "ગીર સોમનાથ", "સોમનાથ"],
+    "Jamnagar": ["jamnagar", "જામનગર"],
+    "Junagadh": ["junagadh", "junagarh", "જૂનાગઢ"],
+    "Kheda": ["kheda", "ખેડા"],
+    "Kutch": ["kutch", "kachchh", "katch", "કચ્છ"],
+    "Mahisagar": ["mahisagar", "મહીસાગર"],
+    "Mehsana": ["mehsana", "mahesana", "મહેસાણા"],
+    "Morbi": ["morbi", "મોરબી"],
+    "Narmada": ["narmada", "નર્મદા"],
+    "Navsari": ["navsari", "નવસારી"],
+    "Panchmahal": ["panchmahal", "panchmahaal", "panchmahal", "પંચમહાલ"],
+    "Patan": ["patan", "પાટણ"],
+    "Porbandar": ["porbandar", "પોરબંદર"],
+    "Rajkot": ["rajkot", "રાજકોટ"],
+    "Sabarkantha": ["sabarkantha", "સાબરકાંઠા"],
+    "Surat": ["surat", "સુરત"],
+    "Surendranagar": ["surendranagar", "સુરેન્દ્રનગર"],
+    "Tapi": ["tapi", "તાપી"],
+    "Vadodara": ["vadodara", "baroda", "વડોદરા"],
+    "Valsad": ["valsad", "વલસાડ"],
+    "Vav-Tharad": ["vav-tharad", "vav tharad", "tharad", "વાવ-થરાદ", "થરાદ"],
+}
+
+# Generic sub-state administrative cues (district/taluka/village). These do
+# not identify a district by themselves; they qualify a district match or
+# signal that the query is locally scoped.
+SUB_STATE_CUES = [
+    "district", "jilla", "zilla", "જિલ્લો", "जिला",
+    "taluka", "taluk", "tehsil", "તાલુકો", "तहसील",
+    "village", "gaon", "ગામ", "गांव",
+    "gram panchayat", "panchayat", "પંચાયત",
+]
+
+# P0-1: society-type cues. MSCS cues are checked first because they are
+# more specific; a query mentioning both is treated as MSCS.
+MSCS_CUES = [
+    "multi-state", "multi state", "multistate", "mscs",
+    "central registrar", "crcs",
+    "cooperative election authority",
+    "works in two states", "operates in two states",
+    "operates in multiple states", "working in two states",
+    "co-op ombudsman", "cooperative ombudsman",
+    "બે રાજ્ય", "दो राज्यों",
+]
+
+STATE_SOCIETY_CUES = [
+    "registrar of cooperative societies",
+    "district registrar",
+    "board of nominees",
+    "gujarat co-operative societies act",
+    "gujarat cooperative societies act",
+    "state cooperative",
+    "state co-operative",
+    "સહકારી મંડળી અધિનિયમ",
+]
+
+# P0-1: subjects for which the answer is state-competent, so a missing
+# state signal safely defaults to the session/selected state with
+# disclosure instead of silently returning a national answer.
+STATE_COMPETENT_DOMAINS = {
+    "cooperative",
+    "pacs",
+    "pacs_computerization",
+    "agriculture",
+    "pmfby",
+    "schemes",
+    "grievance",
+    "finlit",
+    "financial_inclusion",
+}
+
+# Mirrors Settings.selected_state ("gujarat"). Used only when no explicit
+# query signal and no session state exist for a state-competent subject.
+SUBJECT_DEFAULT_STATE = "Gujarat"
+
+# P0-1/P0-2: explicit season vocabulary (English + Hindi; Gujarati season
+# words are intentionally NOT included — no verified lexicon entry).
+SEASON_KEYWORDS = {
+    "kharif": ["kharif", "monsoon crop", "खरीफ"],
+    "rabi": ["rabi", "winter crop", "रबी"],
+    "zaid": ["zaid", "summer crop", "जायद"],
+}
+
+# P2-2: explicit national scope suppresses any state default.
+# Matched with word boundaries ("international" must never trigger).
+NATIONAL_CUES = [
+    "national",
+    "all india",
+    "all-india",
+    "central government",
+    "countrywide",
+]
+
+# P0-1: central/MSCS anchor domains for the jurisdiction-first branch.
+# All entries are research-verified publisher domains; every *.gov.in
+# entry additionally passes the existing official-URL suffix check.
+MSCS_ANCHOR_DOMAINS = [
+    "cooperation.gov.in",
+    "crcs.gov.in",
+    "pib.gov.in",
+    "gov.in",
+    "nic.in",
+]
+
+
 class QueryClassifier:
 
-    def classify(
-        self, query: str, default_state: Optional[str] = None
+    def classify(        self, query: str, default_state: Optional[str] = None
     ) -> QueryClassification:
 
         text = query.lower().strip()
@@ -622,13 +780,84 @@ class QueryClassifier:
                 state = state_name
                 break
 
-        if not state and default_state:
+        explicit_state = state is not None
+
+        # P2-2: explicit national scope suppresses any state default.
+        # Word-boundary matching so "international" never triggers it.
+        national_scope = (
+            not explicit_state
+            and any(
+                re.search(r"\b" + re.escape(cue) + r"\b", text)
+                for cue in NATIONAL_CUES
+            )
+        )
+
+        if not state and default_state and not national_scope:
             state = default_state
+
+        jurisdiction_source = "none"
+        assumed_state = False
+
+        if explicit_state:
+            jurisdiction_source = "explicit"
+        elif state:
+            # State came from the caller (session/selected state), not from
+            # an explicit query signal.
+            jurisdiction_source = "session"
+            assumed_state = True
+
+        # Society type is resolved before the subject default so MSCS
+        # questions never receive a state default: multi-state societies
+        # are under central (CRCS/CEA) jurisdiction by definition.
+        society_type = _detect_society_type(text)
+
+        # P2-2: explicit district implies its state (stronger than
+        # session/default, weaker than an explicit state word).
+        district_raw = _detect_district(text, "Gujarat")
+
+        if (
+            district_raw
+            and not explicit_state
+            and not national_scope
+        ):
+            state = "Gujarat"
+            explicit_state = True
+            jurisdiction_source = "explicit"
+            assumed_state = False
+
+        # H2 hardening: >=2 distinct explicit states + cooperative/society
+        # context => multi-state society (central/CRCS jurisdiction), never
+        # a silent single-state default. Comparison questions without
+        # society words are unaffected (society gate below).
+        if society_type is None and _has_society_context(text):
+            distinct_states = _detect_explicit_states(text)
+            if len(distinct_states) >= 2:
+                society_type = "mscs"
+                state = None
+                explicit_state = False
+                jurisdiction_source = "explicit"
+                assumed_state = False
+
+        if (
+            not state
+            and domain in STATE_COMPETENT_DOMAINS
+            and society_type != "mscs"
+            and not national_scope
+        ):
+            # P0-1 safe subject-level default: for state-competent subjects
+            # a missing state must not silently produce a national answer.
+            # The assumption is flagged so answers can disclose it.
+            state = SUBJECT_DEFAULT_STATE
+            jurisdiction_source = "subject_default"
+            assumed_state = True
 
         if state:
             jurisdiction = "state"
         else:
             jurisdiction = "central"
+
+        district = _detect_district(text, state)
+        case_year, season = _detect_case_time(text)
 
         return QueryClassification(
             domain=domain,
@@ -636,4 +865,93 @@ class QueryClassifier:
             state=state,
             intent=intent,
             confidence=round(confidence, 2),
+            district=district,
+            society_type=society_type,
+            case_year=case_year,
+            season=season,
+            jurisdiction_source=jurisdiction_source,
+            assumed_state=assumed_state,
         )
+
+
+def _detect_district(text: str, state: Optional[str]) -> Optional[str]:
+    """Detect a Gujarat district mention. Returns the canonical name.
+
+    District content is sparse, so detection only *targets* queries and
+    ranking — it must never hard-filter evidence (see service layer).
+    Non-Gujarat district vocabularies are intentionally out of scope for
+    P0 (recorded limitation); only Gujarat districts are resolved.
+    """
+    if state is not None and state.lower() != "gujarat":
+        return None
+    for canonical, variants in GUJARAT_DISTRICTS.items():
+        for variant in variants:
+            if variant in text:
+                return canonical
+    return None
+
+
+def _detect_society_type(text: str) -> Optional[str]:
+    """Detect cooperative society type: "mscs" | "state_society" | None.
+
+    MSCS cues win on conflict because they are more specific. Unknown
+    (None) means the query gives no society-type signal.
+    """
+    for cue in MSCS_CUES:
+        if cue in text:
+            return "mscs"
+    for cue in STATE_SOCIETY_CUES:
+        if cue in text:
+            return "state_society"
+    return None
+
+
+# H2 hardening: minimal society-context gate. Only these cooperative
+# words allow the >=2-states => mscs rule; comparison/economic questions
+# mentioning two states never trigger it.
+_SOCIETY_CONTEXT_WORDS = (
+    "cooperative",
+    "co-operative",
+    "societ",  # society / societies stem
+    "sahakari",
+    "सहकारी",
+    "સહકારી",
+)
+
+
+def _has_society_context(text: str) -> bool:
+    """True when the query carries cooperative/society terminology."""
+    return any(word in text for word in _SOCIETY_CONTEXT_WORDS)
+
+
+def _detect_explicit_states(text: str) -> set[str]:
+    """Collect distinct explicit states named in the query text."""
+    found: set[str] = set()
+    for keyword, state_name in STATE_KEYWORDS.items():
+        if keyword in text:
+            found.add(state_name)
+    return found
+
+
+def _detect_case_time(text: str) -> tuple[Optional[int], Optional[str]]:
+    """Detect an explicit case year and crop season, if reliably present.
+
+    Only explicit mentions count: a 4-digit year (1900-2100) and the
+    English/Hindi season words in SEASON_KEYWORDS. Nothing is inferred.
+    """
+    case_year: Optional[int] = None
+    year_match = re.search(r"\b(19\d{2}|20\d{2}|2100)\b", text)
+    if year_match:
+        try:
+            case_year = int(year_match.group(1))
+        except ValueError:
+            case_year = None
+
+    season: Optional[str] = None
+    for canonical, variants in SEASON_KEYWORDS.items():
+        lowered = [v.lower() for v in variants]
+        if any(v in text for v in lowered):
+            season = canonical
+            break
+
+    return case_year, season

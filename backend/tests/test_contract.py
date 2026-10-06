@@ -50,11 +50,14 @@ def _valid_payload(**overrides) -> dict:
 
 
 def _assert_shape(body: dict):
+    # P1-5: "referral" is an additive optional key (None when answered or
+    # when no authority is confidently known). Old clients ignore it.
     assert set(body) == {"answer", "language", "domain", "intent", "entities",
                           "confidence", "confidence_level", "citations",
                           "abstained", "speech_text", "speech_segments",
-                          "follow_up_question", "mode", "conversation_id"}
-    assert len(body) == 14
+                          "follow_up_question", "mode", "conversation_id",
+                          "referral"}
+    assert len(body) == 15
     assert isinstance(body["answer"], str) and body["answer"]
     assert isinstance(body["language"], str)
     assert body["language"] in ("en", "hi")
@@ -64,6 +67,7 @@ def _assert_shape(body: dict):
     assert isinstance(body["citations"], list)
     assert isinstance(body["abstained"], bool)
     assert body["follow_up_question"] is None
+    assert body["referral"] is None or isinstance(body["referral"], dict)
     for c in body["citations"]:
         # New citation format includes source and source_label; old fields may be absent
         assert "chunk_id" in c

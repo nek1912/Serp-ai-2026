@@ -39,7 +39,7 @@ tells you what's actually built and what the current state is. This file
 | Voice STT | Sarvam AI (primary) → Azure Speech (fallback) | |
 | Voice TTS | Sarvam AI only | Azure excluded (bad Indic output) |
 | Translation | Sarvam Mayura v2 (primary) → Azure Translator (fallback) | |
-| Web search | Tavily (primary) / Firecrawl | for WebRAGService |
+| Web search | Tavily (primary) / SerpApi Google / Firecrawl | for WebRAGService |
 | Document parsing | MinerU `content_list_v2.json` | seed_parser.py |
 | Reranker | Jina reranker (wired, disabled) | `RERANKER_ENABLED=false` |
 
@@ -48,6 +48,10 @@ tells you what's actually built and what the current state is. This file
 ## API contracts (current — match `backend/app/routes/`)
 
 ```
+/chat + /chat/stream require a Clerk JWT (401 without it); the Next.js
+proxy attaches `Authorization: Bearer <token>`. `BACKEND_API_URL` is the
+backend BASE (no `/chat` suffix).
+
 POST /chat
 POST /chat/stream                 ← SSE streaming version
 POST /voice                       ← full audio→STT→RAG→TTS pipeline
@@ -103,9 +107,9 @@ SSE events: `thinking | step | token | metadata | done | error`
 - ✅ `/voice` — Sarvam STT → chat handler → Sarvam TTS
 - ✅ `/voice/transcribe` and `/voice/speak` — standalone STT/TTS endpoints
 - ✅ GrievanceWorkflow — 9-stage state machine, Supabase-persisted
-- ✅ Domain classification — AnchorStore (keyword + cosine, floor 0.30)
+- ✅ Domain classification — AnchorStore (keyword + cosine, floor 0.20)
 - ✅ StaticRAGService — Supabase pgvector hybrid retrieval (dense + lexical RRF)
-- ✅ WebRAGService — 10-step pipeline (Tavily/Firecrawl → BM25 → Gemini rerank → verify)
+- ✅ WebRAGService — 10-step pipeline (Tavily/SerpApi-Google/Firecrawl → BM25 → Gemini rerank → verify) + ≤2 single-axis recovery rounds with cooperative deadline (no new round past `started + web_rag_timeout_s`)
 - ✅ Evidence gate, citation verifier, abstention
 - ✅ 11-language frontend (EN, HI, GU, MR, BN, TA, TE, KN, PA, OR, ML) with chat, grievance, schemes, library pages. Coverage is incomplete: 791 of 3,740 strings untranslated (`npm run i18n:coverage`); missing keys fall back to English
 - ✅ Document ingestion: 11 docs, 4778 chunks (pacs_governance, pacs_computerization, pmfby, financial_inclusion)
