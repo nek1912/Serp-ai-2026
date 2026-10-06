@@ -101,3 +101,32 @@ class TestWordBoundaryMatching:
         result = classifier.classify("I filed an RTI application last month")
         assert result.category == GrievanceCategory.PUBLIC_SERVICE
         assert result.sub_category == GrievanceSubCategory.RTI_DELAY
+
+
+class TestInsuranceNotAgriculture:
+    """Live B6 regression: a general insurance-ombudsman complaint must NOT
+    route to AGRICULTURE/PMFBY_CLAIM_DELAY merely for containing the bare
+    words "insurance"/"claim". Gemini is disabled here to test the
+    deterministic keyword layer in isolation."""
+
+    def test_general_insurance_not_pmfby(self, classifier, monkeypatch):
+        monkeypatch.setattr(classifier, "_gemini_enabled", False)
+        result = classifier.classify(
+            "The insurance company rejected my claim. Where can I complain "
+            "now, and can I approach the insurance ombudsman?"
+        )
+        assert result.category != GrievanceCategory.AGRICULTURE
+        assert result.sub_category != GrievanceSubCategory.PMFBY_CLAIM_DELAY
+        # Low confidence routes to clarification, never a confident wrong authority.
+        assert result.confidence < 0.5
+
+    def test_pmfby_claim_still_agriculture(self, classifier):
+        result = classifier.classify("My PMFBY crop insurance claim is delayed")
+        assert result.category == GrievanceCategory.AGRICULTURE
+        assert result.sub_category == GrievanceSubCategory.PMFBY_CLAIM_DELAY
+        assert result.confidence >= 0.5
+
+    def test_crop_insurance_claim_still_agriculture(self, classifier):
+        result = classifier.classify("My crop insurance claim is delayed")
+        assert result.category == GrievanceCategory.AGRICULTURE
+        assert result.sub_category == GrievanceSubCategory.PMFBY_CLAIM_DELAY

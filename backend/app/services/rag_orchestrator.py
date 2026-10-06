@@ -24,7 +24,11 @@ import time
 from typing import Any, Callable
 
 from app.answer_grounding import verify_answer_grounding
-from app.citation_verifier import verify_citations
+from app.citation_verifier import (
+    normalize_citation_markers,
+    short_citation_id,
+    verify_citations,
+)
 from app.config import Settings, get_settings
 from app.contracts import (
     AbstentionReason,
@@ -286,7 +290,12 @@ class RAGOrchestrator:
                 tertiary=tertiary_provider,
             )
             _t_groq_done = time.monotonic()
-            answer = answer.replace("\u3010", "[").replace("\u3011", "]")
+            answer = answer.replace("【", "[").replace("】", "]")
+            # Normalize format variants (full-width brackets, bare [ID])
+            # into canonical [chunk:ID] BEFORE verification so repair and
+            # verification operate on the same marker set. Validity is still
+            # decided against retrieved evidence, so this weakens nothing.
+            answer = normalize_citation_markers(answer)
         except AllProvidersFailedError:
             logger.exception("All LLM providers failed")
             return self._abstain_response(
@@ -315,7 +324,13 @@ class RAGOrchestrator:
                 )
             )
         ]
-        citation_verification = verify_citations(answer, all_chunk_ids)
+        # URLs taken verbatim from retrieved evidence are not fabricated:
+        # allowlist them so a correct answer naming the official portal
+        # does not fail verification. Non-evidence URLs still fail.
+        allowed_urls = {chunk.url for chunk in all_chunks if chunk.url}
+        citation_verification = verify_citations(
+            answer, all_chunk_ids, allowed_urls=allowed_urls,
+        )
         if not citation_verification.is_valid:
             logger.warning(
                 "Citation verification failed: reason=%s invalid_prefixes=%s — performing auto-repair",
@@ -327,7 +342,9 @@ class RAGOrchestrator:
             
             # Re-ensure valid citations from retrieved chunks
             answer = self._auto_append_citations(answer, all_chunks, force=True)
-            citation_verification = verify_citations(answer, all_chunk_ids)
+            citation_verification = verify_citations(
+                answer, all_chunk_ids, allowed_urls=allowed_urls,
+            )
 
             # Persistent citation failure is a safe failure even when chunks
             # exist: the generated markers do not map to retrieved evidence.
@@ -694,7 +711,7 @@ class RAGOrchestrator:
                 "suspicious"
             ):
                 continue
-            short_id = chunk.chunk_id[:8]
+            short_id = short_citation_id(chunk.chunk_id)
             if short_id not in seen:
                 seen.add(short_id)
                 citation_parts.append(f"[chunk:{short_id}]")
@@ -749,7 +766,7 @@ class RAGOrchestrator:
             ):
                 continue
 
-            short_id = chunk.chunk_id[:8]
+            short_id = short_citation_id(chunk.chunk_id)
             if short_id in seen:
                 continue
             seen.add(short_id)

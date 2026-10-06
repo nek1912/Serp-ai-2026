@@ -352,6 +352,118 @@ class TestCitationFailure:
         assert response.confidence == 0.0
         assert response.citations == []
 
+    async def test_evidence_url_is_not_fabrication(self):
+        """Live B2 regression: a correct answer naming the official evidence
+        URL must pass citation verification (evidence URLs are allowlisted)."""
+        from app.citation_verifier import verify_citations
+        answer = "Register on https://gjfr.agristack.gov.in today. [chunk:abc12345]"
+        ids = ["abc12345def67890"]
+        assert verify_citations(
+            answer, ids, allowed_urls={"https://gjfr.agristack.gov.in"},
+        ).is_valid is True
+        assert verify_citations(answer, ids).is_valid is False
+
+    async def test_answer_naming_official_portal_proceeds(self):
+        """Orchestrator end-to-end: evidence URL + valid citation -> answer."""
+        chunks = [_make_evidence_chunk(
+            content="Register on the official farmer registry portal with Aadhaar.",
+            url="https://gjfr.agristack.gov.in",
+        )]
+        response = await _run_orchestrator(
+            "Register on https://gjfr.agristack.gov.in with Aadhaar. [chunk:abc12345]",
+            chunks,
+        )
+        assert response.abstained is False
+        assert "https://gjfr.agristack.gov.in" in response.answer
+
+    async def test_non_evidence_url_still_fails_safe(self):
+        """A URL not present in evidence is still fabrication -> abstention."""
+        chunks = [_make_evidence_chunk(
+            content="Register on the official farmer registry portal with Aadhaar.",
+            url="https://gjfr.agristack.gov.in",
+        )]
+        response = await _run_orchestrator(
+            "Register on https://fake-portal.example.com now. [chunk:abc12345]",
+            chunks,
+        )
+        assert response.abstained is True
+        assert response.confidence == 0.0
+
+    async def test_fullwidth_valid_marker_proceeds_clean(self):
+        """Format variant with a VALID id normalizes, verifies, and is stripped."""
+        chunks = [_make_evidence_chunk(
+            content="PMFBY premium is 2% for kharif crops.",
+        )]
+        response = await _run_orchestrator(
+            "PMFBY premium is 2% for kharif crops. 【abc12345】",
+            chunks,
+        )
+        assert response.abstained is False
+        assert "【" not in response.answer
+        assert "】" not in response.answer
+
+    async def test_fullwidth_invalid_marker_repaired(self):
+        """Format variant with an INVALID id is repaired away, valid appended."""
+        chunks = [_make_evidence_chunk(
+            content="PMFBY premium is 2% for kharif crops.",
+        )]
+        response = await _run_orchestrator(
+            "PMFBY premium is 2% for kharif crops. 【ffffffff】",
+            chunks,
+        )
+        assert response.abstained is False
+        assert "ffffffff" not in response.answer
+
+    async def test_bare_hex_marker_normalized(self):
+        """Bare [ID] without chunk: prefix normalizes and verifies."""
+        chunks = [_make_evidence_chunk(
+            content="PMFBY premium is 2% for kharif crops.",
+        )]
+        response = await _run_orchestrator(
+            "PMFBY premium is 2% for kharif crops. [abc12345]",
+            chunks,
+        )
+        assert response.abstained is False
+        assert "[abc12345]" not in response.answer
+
+    async def test_same_stem_web_markers_repaired_to_full_ids(self):
+        """Live B7 shape: truncated markers over same-stem web chunks are
+        repaired to full unambiguous IDs instead of abstaining."""
+        chunks = [
+            _make_evidence_chunk(
+                chunk_id="web_89df1181cdaf_c2701",
+                content="Societies operating in more than one state register "
+                        "with the Central Registrar.",
+                source_type="web",
+                title="MSCS Registration",
+                url="https://example.gov.in/mscs",
+            ),
+            _make_evidence_chunk(
+                chunk_id="web_89df1181cdaf_c2702",
+                content="The Central Registrar administers multi-state societies.",
+                source_type="web",
+                title="MSCS Administration",
+                url="https://example.gov.in/mscs",
+            ),
+            _make_evidence_chunk(
+                chunk_id="7c2c4e06-282e-4011-8358-8bb5bfe76c77",
+                content="No society shall open a branch outside the state "
+                        "without permission.",
+                source_type="static",
+                title="Cooperative Societies Act",
+                url="",
+            ),
+        ]
+        response = await _run_orchestrator(
+            "Register with the Central Registrar. "
+            "[chunk:web_89df] [chunk:7c2c4e06]",
+            chunks,
+        )
+        assert response.abstained is False
+        cited = {c["chunk_id"] for c in response.citations}
+        assert "web_89df1181cdaf_c2701" in cited or "web_89df1181cdaf_c2702" in cited
+        assert "7c2c4e06" in cited
+
     async def test_repaired_citations_proceed(self):
         """Existing repair path: invalid -> valid still returns an answer."""
         chunks = [_make_evidence_chunk()]

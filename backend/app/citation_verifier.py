@@ -61,16 +61,32 @@ class VerificationResult:
     repair_attempted: bool = False
 
 
+def short_citation_id(chunk_id: str) -> str:
+    """Stable, unambiguous short ID for citation markers and prompts.
+
+    Web-style IDs (``web_{hex}_c{N}``) are already compact: keep them whole.
+    Truncating to 8 chars collides across chunks from the same URL (only the
+    ``_cN`` counter differs), which made legitimate web citations unverifiable
+    and forced safe abstention. UUID-style IDs keep the 8-char prefix.
+    """
+    if chunk_id.startswith("web_"):
+        return chunk_id
+    return chunk_id[:8]
+
+
 def extract_citations_from_answer(answer: str) -> list[tuple[str, str]]:
     """Extract all [chunk:ID] markers from answer text.
 
-    Returns list of (full_match, prefix) tuples.
+    Returns list of (full_match, prefix) tuples. The prefix is the full ID
+    for web-style markers (unambiguous) and the 8-char prefix otherwise,
+    mirroring :func:`short_citation_id`.
     """
     answer = normalize_citation_markers(answer)
     results = []
     for match in _CITE_PATTERN.finditer(answer):
         full = match.group(0)
-        prefix = match.group(1)[:8].lower()
+        cid = match.group(1)
+        prefix = (cid if cid.startswith("web_") else cid[:8]).lower()
         results.append((full, prefix))
     return results
 
