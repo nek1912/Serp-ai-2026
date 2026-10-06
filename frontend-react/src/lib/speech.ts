@@ -1,4 +1,5 @@
 import { fetchVoiceSpeak, type SpeechSegment } from "./api";
+import { apiFetch } from "./backend";
 
 export type { SpeechSegment };
 
@@ -375,7 +376,7 @@ function speakBackend(
     formData.append("text", text);
     formData.append("language", locale);
 
-    fetch("/api/speak", {
+    apiFetch("/api/speak", {
       method: "POST",
       body: formData,
     })
@@ -384,14 +385,28 @@ function speakBackend(
           throw new Error(`Speak API ${res.status}`);
         }
 
-        return res.arrayBuffer();
+        /*
+         * FastAPI returns { audio: "<hex>", language } as JSON. The removed BFF
+         * used to do the hex -> binary conversion here and hand back
+         * audio/mpeg, so this used to be res.arrayBuffer(). With the BFF gone
+         * the conversion moves to the browser.
+         */
+        return res.json();
       })
-      .then((buffer) => {
-        if (buffer.byteLength < 100) {
+      .then(({ audio: audioHex }: { audio?: string }) => {
+        if (!audioHex) throw new Error("Backend TTS returned empty audio");
+
+        // FastAPI returns hex; the removed BFF used to convert it to binary.
+        const bytes = new Uint8Array(audioHex.length / 2);
+        for (let i = 0; i < audioHex.length; i += 2) {
+          bytes[i / 2] = parseInt(audioHex.substr(i, 2), 16);
+        }
+
+        if (bytes.byteLength < 100) {
           throw new Error("Audio too small");
         }
 
-        const blob = new Blob([buffer], {
+        const blob = new Blob([bytes], {
           type: "audio/mpeg",
         });
 

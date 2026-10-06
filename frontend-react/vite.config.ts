@@ -18,15 +18,13 @@ export default defineConfig({
     // Fail loudly instead of silently auto-incrementing, so the port in use
     // and the Clerk redirect URLs can never drift apart unnoticed.
     strictPort: true,
-    proxy: {
-      // Stream SSE through untouched. `changeOrigin` keeps the Host header
-      // consistent; no compression is applied by Vite's proxy, so tokens
-      // arrive incrementally. Verified by gate 6.
-      "/api": {
-        target: `http://localhost:${process.env.BFF_PORT || 8787}`,
-        changeOrigin: true,
-      },
-    },
+    /*
+     * No /api proxy. The Express BFF has been removed: the browser calls the
+     * FastAPI backend directly (see src/lib/backend.ts) and attaches Clerk's
+     * own session token. That makes the backend a cross-origin request, which
+     * is why ALLOWED_ORIGINS in the backend's .env must list this dev server's
+     * origin.
+     */
   },
   build: {
     outDir: "dist",

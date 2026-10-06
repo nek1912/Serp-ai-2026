@@ -1,7 +1,9 @@
-import { ClerkProvider } from "@clerk/react";
+import { ClerkProvider, useAuth } from "@clerk/react";
+import { useEffect } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { LanguageProvider } from "@/lib/i18n/provider";
 import { ConditionalNavs } from "@/components/layout/ConditionalNavs";
+import { registerTokenProvider } from "@/lib/backend";
 
 import { HomePage } from "@/pages/HomePage";
 import { ChatPage } from "@/pages/ChatPage";
@@ -20,6 +22,26 @@ import SignInPage from "@/pages/SignInPage";
 import SignUpPage from "@/pages/SignUpPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
+/**
+ * Hands Clerk's session-token getter to the plain-module API layer.
+ *
+ * The BFF that used to sit in front of FastAPI is gone, so the browser now
+ * signs its own requests. api.ts and speech.ts are not components, so they
+ * cannot call useAuth() directly; this bridge is what lets them.
+ *
+ * Must render inside <ClerkProvider>.
+ */
+function AuthTokenBridge() {
+  const { getToken } = useAuth();
+
+  useEffect(() => {
+    registerTokenProvider(getToken);
+    return () => registerTokenProvider(null);
+  }, [getToken]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <ClerkProvider
@@ -29,6 +51,7 @@ export default function App() {
     >
       <BrowserRouter>
         <LanguageProvider>
+          <AuthTokenBridge />
           <ConditionalNavs>
             {/* Preserved from app/layout.tsx:94. Targets <main id="content">
                 in ConditionalNavs; .skip-link is defined in globals.css. */}

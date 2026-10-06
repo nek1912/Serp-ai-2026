@@ -1,5 +1,6 @@
 import { test, expect, vi, afterEach } from "vitest";
 import { sendChat, fetchVoiceSpeak, type SpeechSegment } from "../api";
+import { backendPath, backendUrl } from "../backend";
 
 type FetchMock = (
   input: RequestInfo | URL,
@@ -10,7 +11,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("fetchVoiceSpeak posts segments to /api/voice/speak and returns audio hex", async () => {
+/*
+ * The Express BFF was removed, so requests now go straight to the FastAPI
+ * backend. These assertions pin that mapping: the callers still pass the old
+ * `/api/*` paths, and backend.ts rewrites them to FastAPI's routes and prefixes
+ * the backend origin.
+ */
+test("backendPath maps BFF paths onto FastAPI routes", () => {
+  expect(backendPath("/api/chat")).toBe("/chat/stream");
+  expect(backendPath("/api/chat/stream")).toBe("/chat/stream");
+  expect(backendPath("/api/grievance/detect")).toBe("/grievances");
+  expect(backendPath("/api/grievance/answer")).toBe("/grievances/answer");
+  expect(backendPath("/api/grievance/clarify")).toBe("/grievances/clarify");
+  expect(backendPath("/api/grievance/finalize")).toBe("/grievances/finalize");
+  expect(backendPath("/api/speak")).toBe("/voice/speak");
+  expect(backendPath("/api/voice/speak")).toBe("/voice/speak");
+  expect(backendPath("/api/translate")).toBe("/translate");
+});
+
+test("backendPath converts the grievance fields query into a path parameter", () => {
+  expect(backendPath("/api/grievance/fields?conversation_id=abc&language=hi")).toBe(
+    "/grievances/abc/fields?language=hi",
+  );
+  // Default language omitted entirely when not supplied.
+  expect(backendPath("/api/grievance/fields?conversation_id=abc")).toBe(
+    "/grievances/abc/fields",
+  );
+});
+
+test("backendUrl prefixes the configured backend origin", () => {
+  expect(backendUrl("/api/translate")).toBe("http://localhost:8000/translate");
+});
+
+test("fetchVoiceSpeak posts segments to the backend and returns audio hex", async () => {
   const segments: SpeechSegment[] = [{ text: "hello", language: "en" }];
   const fetchMock = vi.fn<FetchMock>(async () => ({
     ok: true,
@@ -23,7 +56,7 @@ test("fetchVoiceSpeak posts segments to /api/voice/speak and returns audio hex",
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const call = fetchMock.mock.calls[0];
   const [url, init] = call as [RequestInfo | URL, RequestInit];
-  expect(url).toBe("/api/voice/speak");
+  expect(url).toBe("http://localhost:8000/voice/speak");
   expect(init.method).toBe("POST");
   const body = JSON.parse(init.body as string);
   expect(body.segments).toEqual(segments);

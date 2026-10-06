@@ -26,9 +26,13 @@ from typing import Any
 
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
 
 
-load_dotenv()
+# Explicit repo-root path — see the note in web_rag/providers.py. A bare
+# load_dotenv() would load the stale backend/.env into os.environ and override
+# the configuration pydantic reads from the correct file.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 
 FIRECRAWL_SEARCH_URL = (

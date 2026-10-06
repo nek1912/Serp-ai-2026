@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { sendChat, sendChatStream, ChatResponse, type StreamEvent } from "@/lib/api";
+import { apiFetch } from "@/lib/backend";
 import { useI18n } from "@/lib/i18n/provider";
 import type { Locale } from "@/lib/i18n/i18n";
 import { formatSchemeQuestion, formatServiceQuestion, formatLegalQuestion } from "@/lib/i18n/formatQuery";
@@ -67,14 +68,16 @@ function saveConversations(convs: Conversation[]) {
 }
 
 // Re-translate a previously received answer into the current UI language via the
-// server-side /api/translate proxy (Azure Translator). Falls back to the original
-// text if translation is unavailable/unconfigured so the UI stays functional.
+// FastAPI backend. Falls back to the original text if translation is
+// unavailable/unconfigured so the UI stays functional.
 async function translate(text: string, locale: Locale): Promise<string> {
   try {
-    const res = await fetch("/api/translate", {
+    const res = await apiFetch("/api/translate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts: [text], to: locale }),
+      // FastAPI's field name is `target_language`; the old BFF payload used
+      // `to`, which the backend ignored.
+      body: JSON.stringify({ texts: [text], target_language: locale }),
     });
     if (!res.ok) return text;
     const data = (await res.json()) as { translations?: string[] };

@@ -1,4 +1,5 @@
 import type { Locale } from "@/lib/i18n/i18n";
+import { apiFetch } from "@/lib/backend";
 
 export interface SpeechSegment {
   text: string;
@@ -147,7 +148,7 @@ export async function detectGrievance(payload: {
   conversation_id: string;
   user_id: string;
 }): Promise<GrievanceDetectResponse> {
-  const r = await fetch("/api/grievance/detect", {
+  const r = await apiFetch("/api/grievance/detect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -160,7 +161,7 @@ export async function getGrievanceFields(
   conversationId: string,
   language: string,
 ): Promise<{ status: string; mandatory_fields: GrievanceFieldSpec[]; optional_fields: GrievanceFieldSpec[] }> {
-  const r = await fetch(
+  const r = await apiFetch(
     `/api/grievance/fields?conversation_id=${encodeURIComponent(conversationId)}&language=${encodeURIComponent(language)}`,
   );
   if (!r.ok) throw new Error(`API ${r.status}`);
@@ -172,7 +173,7 @@ export async function answerGrievanceField(payload: {
   field: string;
   value: string;
 }): Promise<{ status: string }> {
-  const r = await fetch("/api/grievance/answer", {
+  const r = await apiFetch("/api/grievance/answer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -185,7 +186,7 @@ export async function finalizeGrievanceDraft(payload: {
   conversation_id: string;
   language: string;
 }): Promise<{ status: string; grievance: Grievance; mixed_language: boolean; speech_text?: string; speech_segments?: SpeechSegment[] }> {
-  const r = await fetch("/api/grievance/finalize", {
+  const r = await apiFetch("/api/grievance/finalize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -204,7 +205,7 @@ export async function clarifyGrievance(payload: {
   draft_summary: ChatResponse["grievance_draft_summary"];
   fields_schema: ChatResponse["grievance_fields_schema"];
 }> {
-  const r = await fetch("/api/grievance/clarify", {
+  const r = await apiFetch("/api/grievance/clarify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -222,7 +223,7 @@ export async function sendChat(payload: {
   ui_language_explicit?: boolean;
   mode?: "static" | "web" | "rag_web";
 }): Promise<ChatResponse> {
-  const r = await fetch("/api/chat", {
+  const r = await apiFetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -259,7 +260,7 @@ export async function sendChatStream(
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const r = await fetch("/api/chat/stream", {
+  const r = await apiFetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -306,7 +307,7 @@ export async function translateTexts(
   sourceLanguage: string,
   targetLanguage: string,
 ): Promise<TranslateItem[]> {
-  const r = await fetch("/api/translate", {
+  const r = await apiFetch("/api/translate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -323,7 +324,7 @@ export async function translateTexts(
 export async function fetchVoiceSpeak(
   segments: SpeechSegment[],
 ): Promise<{ audio: string; language: string }> {
-  const r = await fetch("/api/voice/speak", {
+  const r = await apiFetch("/api/voice/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ segments }),

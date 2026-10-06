@@ -1,4 +1,6 @@
 
+import { apiFetch } from "./backend";
+
 const cache = new Map<string, string>();
 
 function key(to: string, text: string): string {
@@ -11,16 +13,19 @@ export interface Translator {
 }
 
 /**
- * Client-side Azure Translator wrapper. Translates via the server proxy
- * (/api/translate) and caches results in-memory. On any failure, returns the
+ * Client-side translator. Calls the FastAPI backend directly and caches
+ * results in memory. On any failure, returns the
  * original text so the UI still renders (English fallback).
  */
 export function createTranslator(): Translator {
   async function call(texts: string[], to: string): Promise<string[]> {
-    const res = await fetch("/api/translate", {
+    const res = await apiFetch("/api/translate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts, to }),
+      // FastAPI names this field `target_language`. While requests went through
+      // the BFF the payload sent `to`, which the backend discarded, so the
+      // target silently fell back to "hi" for every user.
+      body: JSON.stringify({ texts, target_language: to }),
     });
     if (!res.ok) throw new Error(`translate ${res.status}`);
     const data = (await res.json()) as { translations: string[] };
