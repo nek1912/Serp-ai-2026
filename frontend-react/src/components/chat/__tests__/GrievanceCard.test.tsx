@@ -1,17 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { LanguageProvider } from "@/lib/i18n/provider";
 import type { Grievance } from "@/lib/api";
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-    back: vi.fn(),
-    prefetch: vi.fn(),
-  }),
-  useSearchParams: () => new URLSearchParams(),
-}));
 
 import { GrievanceCard } from "../GrievanceCard";
 
@@ -21,9 +13,11 @@ afterEach(() => {
 
 function renderCard(grievance: Grievance) {
   return render(
-    <LanguageProvider>
-      <GrievanceCard grievance={grievance} />
-    </LanguageProvider>,
+    <MemoryRouter>
+      <LanguageProvider>
+        <GrievanceCard grievance={grievance} />
+      </LanguageProvider>
+    </MemoryRouter>,
   );
 }
 
