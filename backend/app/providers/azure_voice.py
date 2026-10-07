@@ -16,6 +16,7 @@ provider in the chain (never inventing an answer).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.config import get_settings
@@ -78,7 +79,9 @@ class AzureVoiceProvider:
             )
             stream.write(audio_bytes)
             stream.close()
-            result = recognizer.recognize_once()
+            # recognize_once() blocks the calling thread — run it off the
+            # event loop so one slow STT call cannot stall all requests.
+            result = await asyncio.to_thread(recognizer.recognize_once)
         except Exception as exc:
             logger.warning("Azure STT failed: %r", exc)
             raise RuntimeError("Azure STT failed") from exc
@@ -97,7 +100,9 @@ class AzureVoiceProvider:
             config = speechsdk.SpeechConfig(subscription=self.speech_key, region=self.speech_region)
             config.speech_synthesis_voice_name = self._voice(language)
             synthesizer = speechsdk.SpeechSynthesizer(speech_config=config, audio_config=None)
-            result = synthesizer.speak_text_async(text).get()
+            # .get() blocks the calling thread — wait for it off the loop.
+            future = synthesizer.speak_text_async(text)
+            result = await asyncio.to_thread(future.get)
         except Exception as exc:
             logger.warning("Azure TTS failed: %r", exc)
             raise RuntimeError("Azure TTS failed") from exc
@@ -141,7 +146,9 @@ class AzureVoiceProvider:
         try:
             config = speechsdk.SpeechConfig(subscription=self.speech_key, region=self.speech_region)
             synthesizer = speechsdk.SpeechSynthesizer(speech_config=config, audio_config=None)
-            result = synthesizer.speak_ssml_async(ssml).get()
+            # .get() blocks the calling thread — wait for it off the loop.
+            future = synthesizer.speak_ssml_async(ssml)
+            result = await asyncio.to_thread(future.get)
         except Exception as exc:
             logger.warning("Azure TTS segments failed: %r", exc)
             raise RuntimeError("Azure TTS failed") from exc

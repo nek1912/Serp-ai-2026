@@ -49,3 +49,59 @@ def test_trim_messages_deletes_old(mock_sb):
     ]
     trim_messages(str(uuid.uuid4()), keep=50)
     sb.table().delete.assert_called_once()
+
+
+@patch("app.session_store.get_supabase")
+def test_get_session_falls_back_without_user_id_column(mock_sb):
+    # Pre-migration schema: the modern select raises naming user_id;
+    # get_session must retry legacy columns with user_id None.
+    import app.session_store as store
+    store._WARNED_LEGACY_SESSIONS_SCHEMA = True  # silence warn-once in tests
+    from app.session_store import get_session
+    sb = MagicMock()
+    mock_sb.return_value = sb
+    legacy_resp = MagicMock()
+    legacy_resp.data = [{"session_id": "s1", "state": {"selected_state": None}}]
+    sb.table().select().eq().limit().execute.side_effect = [
+        Exception('column "user_id" does not exist'),
+        legacy_resp,
+    ]
+    row = get_session("s1")
+    assert row is not None
+    assert row["session_id"] == "s1"
+    assert row["user_id"] is None
+
+
+@patch("app.session_store.get_supabase")
+def test_get_session_none_on_generic_error(mock_sb):
+    # Non-schema errors keep the legacy silent fail-open (None).
+    import app.session_store as store
+    store._WARNED_LEGACY_SESSIONS_SCHEMA = True
+    from app.session_store import get_session
+    sb = MagicMock()
+    mock_sb.return_value = sb
+    sb.table().select().eq().limit().execute.side_effect = Exception("connection refused")
+    assert get_session("s1") is None
+
+
+@patch("app.session_store.get_supabase")
+def test_touch_session_upsert_falls_back_without_user_id_column(mock_sb):
+    # Pre-migration schema: upsert with user_id fails naming user_id;
+    # touch_session must retry without it so the session still persists.
+    import app.session_store as store
+    store._WARNED_LEGACY_SESSIONS_SCHEMA = True
+    from app.session_store import touch_session
+    sb = MagicMock()
+    mock_sb.return_value = sb
+    # get_session inside touch_session: no existing row
+    # upsert: first (with user_id) raises, second (legacy) succeeds
+    sb.table().select().eq().limit().execute.return_value.data = []
+    sb.table().upsert.side_effect = [
+        Exception('column "user_id" does not exist'),
+        MagicMock(),
+    ]
+    touch_session("s1", None, "gu", user_id="user-1")
+    assert sb.table().upsert.call_count == 2
+    legacy_payload = sb.table().upsert.call_args[0][0]
+    assert "user_id" not in legacy_payload
+    assert legacy_payload["session_id"] == "s1"

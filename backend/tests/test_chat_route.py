@@ -48,7 +48,8 @@ def test_answered_with_valid_citation(respx_mock):
     assert set(body) == {"answer", "language", "domain", "intent", "entities",
                           "confidence", "confidence_level", "citations",
                           "abstained", "speech_text", "speech_segments",
-                          "follow_up_question", "mode", "conversation_id"}
+                          "follow_up_question", "mode", "conversation_id",
+                          "referral"}
     # Speech copy must drop citation markers but keep the same wording.
     assert "[chunk:" not in body["speech_text"]
     assert "eligible" in body["speech_text"].lower()

@@ -45,19 +45,36 @@ class Settings(BaseSettings):
     jina_api_key_2: str = ""
     supabase_url: str
     supabase_service_key: str
+    # NOTE: default ":3000" predates the Vite dev server on :5173 — a fresh
+    # checkout needs ALLOWED_ORIGINS overridden or browser calls CORS-fail.
     allowed_origins: str = "http://localhost:3000"
-    selected_state: str | None = "gujarat"
+    # NOTE (P1): the former `selected_state` field was removed — it had
+    # zero readers (dead duplicate of session state). Jurisdiction comes
+    # from req.state -> session state ("selected_state" key in the
+    # sessions-row JSON, see session_store.py) -> explicit query words.
+    # Do not reintroduce another global default state here.
     # Model IDs loaded directly from environment (.env)
     groq_model: str = ""
     groq_fallback_model: str = ""
     gemini_model: str = ""
     gemini_fallback_model: str = ""
-    embed_model: str = ""
+    embed_model: str = ""  # Gemini embedding model id, e.g. "gemini-embedding-2".
+    # WARNING: EMBED_MODEL (Gemini) vs EMBEDDING_MODEL (Jina) — different
+    # providers, different vars (see note below). The production .env sets
+    # EMBEDDING_MODEL but NOT EMBED_MODEL, so the Gemini embedding fallback
+    # path raises until EMBED_MODEL is set. Jina is primary when configured.
     embedding_model: str = "jina-embeddings-v3"
     jina_embed_model: str = ""
-    reranker_model: str = ""
+    # NOTE: three vars for one concept (legacy). Precedence in
+    # embeddings.py: jina_embed_model > embedding_model > built-in default.
+    # embed_model is the GEMINI embedding model id (different provider).
+    reranker_model: str = ""  # DEAD: no consumer (Jina reranker has no model id).
+    # WARNING — RERANKER_ENABLED gates TWO independent rerankers, not one:
+    #   * static RAG Jina rerank (static_rag.py), AND
+    #   * WebRAG Gemini pre+final ranking (gemini_reranker.py degrades to
+    #     passthrough when False). Do not read it as "Jina reranker only".
     reranker_enabled: bool = False
-    retrieval_strategy: str = "dense"  # dense | hybrid | hybrid_reranked
+    retrieval_strategy: str = "dense"  # DEAD: no consumer (strategy is fixed hybrid+RRF).
 
     @property
     def groq_model_list(self) -> list[str]:
@@ -109,9 +126,16 @@ class Settings(BaseSettings):
     firecrawl_api_url: str = "https://api.firecrawl.dev/v1"
     serpapi_api_key_1: str = ""
     serpapi_api_key_2: str = ""
+    # Single source of truth for provider selection together with the
+    # SEARCH_PROVIDERS env var: web_rag/providers.py resolves as
+    # explicit arg > os.getenv("SEARCH_PROVIDERS") > this setting >
+    # DEFAULT_PROVIDERS, and logs the source plus the effective set.
     search_providers: str = "tavily"
 
     # Grievance & evidence
+    # NOTE: despite the name, this model id is ALSO the Gemini reranker
+    # model (gemini_reranker.py reads grievance_gemini_model, not
+    # gemini_model). Renaming it requires touching the reranker too.
     grievance_gemini_model: str = "gemini-3.5-flash-lite"
 
     # Clerk authentication

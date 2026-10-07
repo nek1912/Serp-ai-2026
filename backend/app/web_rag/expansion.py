@@ -1,9 +1,12 @@
 """P2-1 constrained terminology expansion + P2-1/P2-2 scheme exceptions.
 
 Expansion: bounded synonym tables (terminology_expansion.json) scoped by
-classification domain/subject. Terms append to DERIVED English branch
-queries only — the user query is never rewritten, and applied rules are
-recorded in discovery metadata (original + canonical preserved).
+classification domain/subject, with an optional per-rule `when.require_any`
+query-text gate (rule fires only if the query mentions a trigger term;
+absent gate = legacy domain/subject scoping). Terms append to DERIVED
+English branch queries only — the user query is never rewritten, and
+applied rules are recorded in discovery metadata (original + canonical
+preserved).
 
 Exceptions: explicit opt-out data (scheme_exceptions.json). Demotion-only,
 instrument-preserving, single-state-scoped. PMFBY is never globally
@@ -66,7 +69,12 @@ def assumed_dampen_factor(subjects: set[str] | None, assumed: bool) -> float:
         return 0.5
 
 
-def _rule_matches(rule: dict, domain: str | None, subjects: set[str]) -> bool:
+def _rule_matches(
+    rule: dict,
+    domain: str | None,
+    subjects: set[str],
+    query_lower: str = "",
+) -> bool:
     when = rule.get("when", {}) if isinstance(rule, dict) else {}
     domains = when.get("domains") or []
     wanted = set(when.get("subjects") or [])
@@ -74,6 +82,19 @@ def _rule_matches(rule: dict, domain: str | None, subjects: set[str]) -> bool:
         return False
     if wanted and not (wanted & subjects):
         return False
+    # Optional query-text gate: the rule fires only when the query itself
+    # mentions at least one trigger term. Subjects are domain-derived
+    # (e.g. every agriculture query carries crop_insurance/crop_relief),
+    # so without this gate a registry/portal query gets unrelated relief
+    # synonyms appended. Absent require_any preserves legacy behavior.
+    require_any = when.get("require_any") or []
+    if require_any:
+        lowered = query_lower or ""
+        if not any(
+            isinstance(t, str) and t and t.lower() in lowered
+            for t in require_any
+        ):
+            return False
     return True
 
 
@@ -101,7 +122,7 @@ def expansion_terms(query: str, classification) -> tuple[list[str], dict]:
     for rule in rules:
         if len(applied) >= max_rules:
             break
-        if not _rule_matches(rule, domain, subjects):
+        if not _rule_matches(rule, domain, subjects, lowered):
             continue
         append = rule.get("append", {}) if isinstance(rule, dict) else {}
         candidates: list[str] = []

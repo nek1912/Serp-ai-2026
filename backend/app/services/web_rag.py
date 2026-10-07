@@ -16,7 +16,7 @@ Architecture (eGovAssistant-style, evidence-only):
          ↓
     Step 6: Gemini final reranking
          ↓
-    Step 7: Relevance gate (threshold 60.0)
+    Step 7: Relevance gate (threshold 40.0)
          ↓
     Step 8: Source verification
          ↓
@@ -45,7 +45,11 @@ from app.retrieval.rrf import reciprocal_rank_fusion
 from app.security.source_verifier import SourceVerifier
 from app.web_rag.bm25_ranker import WebBM25Ranker
 from app.web_rag.diversity import diversify
-from app.web_rag.query_classifier import QueryClassification
+from app.web_rag.query_classifier import (
+    QueryClassification,
+    effective_domain,
+    resolve_expected_state,
+)
 from app.web_rag.recovery import (
     MAX_RECOVERY_ROUNDS,
     assess_evidence_state,
@@ -68,9 +72,33 @@ SUPPORTED_DOMAINS = {
     "driving_licence",
 }
 
-# Minimum relevance score for evidence to pass the relevance gate
-# (matching eGovAssistant DEFAULT_MIN_RELEVANCE_SCORE = 60.0)
+# Minimum relevance score for evidence to pass the relevance gate.
+# NOTE: the module docstring previously said 60.0 (an eGovAssistant value);
+# the live threshold is 40.0. Do not raise it to "fix" retrieval problems
+# without measuring recall impact first.
 DEFAULT_MIN_RELEVANCE_SCORE = 40.0
+
+
+def stamp_classification_state(
+    result: dict, classification_data: dict
+) -> dict:
+    """Fill missing per-source jurisdiction/state from the query.
+
+    Existing per-source values are never overwritten. An explicit
+    query state never stamps unknown publishers: a source with no
+    jurisdiction signal of its own must not survive an explicit state
+    filter by wearing the query's state (central publishers remain
+    compatible everywhere by design and need no stamping).
+    """
+    if classification_data.get("jurisdiction_source") == "explicit":
+        return result
+    if classification_data.get("jurisdiction") and not result.get(
+        "jurisdiction"
+    ):
+        result["jurisdiction"] = classification_data["jurisdiction"]
+    if classification_data.get("state") and not result.get("state"):
+        result["state"] = classification_data["state"]
+    return result
 
 
 class WebRAGService:
@@ -162,7 +190,7 @@ class WebRAGService:
         if top_k is None:
             top_k = self.final_top_k
 
-        effective_domain = domain or ""
+        anchor_domain = domain or ""
 
         if classification is None:
             classification = self.web_discovery.classifier.classify(query, default_state=state)
@@ -172,10 +200,10 @@ class WebRAGService:
         # ── Step 1: Domain scope gate ───────────────────────────────
         logger.info("[Step 1] Domain scope gate")
 
-        # Use AnchorStore domain or classification domain if available
-        effective_domain_for_gate = domain
-        if classification is not None and classification.domain != "general":
-            effective_domain_for_gate = classification.domain
+        # P1: same effective-domain rule as the orchestrator — the
+        # AnchorStore domain wins when specific; the classifier only
+        # fills in for empty/general anchors.
+        effective_domain_for_gate = effective_domain(domain, classification)
 
         if not effective_domain_for_gate:
             effective_domain_for_gate = "general"
@@ -217,7 +245,7 @@ class WebRAGService:
                 abstained=True,
                 reason=AbstentionReason.PROVIDER_UNAVAILABLE,
                 band=ConfidenceBand.LOW,
-                domain=effective_domain,
+                domain=anchor_domain,
                 metadata={"step": "web_discovery", "error": "provider_failure"},
             )
 
@@ -239,7 +267,7 @@ class WebRAGService:
                 abstained=True,
                 reason=AbstentionReason.NO_ELIGIBLE_SOURCE,
                 band=ConfidenceBand.LOW,
-                domain=effective_domain,
+                domain=anchor_domain,
                 metadata={"step": "web_discovery", "discovered": 0},
             )
 
@@ -248,7 +276,7 @@ class WebRAGService:
             discovery=discovery,
             classification=classification,
             state=state,
-            effective_domain=effective_domain,
+            effective_domain=anchor_domain,
             top_k=top_k,
             as_of_date=as_of_date,
         )
@@ -333,7 +361,7 @@ class WebRAGService:
                 discovery=recovery_discovery,
                 classification=modified,
                 state=state,
-                effective_domain=effective_domain,
+                effective_domain=anchor_domain,
                 top_k=top_k,
                 as_of_date=as_of_date,
             )
@@ -502,10 +530,7 @@ class WebRAGService:
         for result in final_results:
             if classification_data.get("domain"):
                 result["query_domain"] = classification_data["domain"]
-            if classification_data.get("jurisdiction") and not result.get("jurisdiction"):
-                result["jurisdiction"] = classification_data["jurisdiction"]
-            if classification_data.get("state") and not result.get("state"):
-                result["state"] = classification_data["state"]
+            stamp_classification_state(result, classification_data)
             if classification_data.get("confidence"):
                 result["classification_confidence"] = classification_data["confidence"]
 
@@ -555,11 +580,14 @@ class WebRAGService:
         try:
             verification_result = self.source_verifier.verify_and_filter(final_results)
         except Exception:
+            # Fail closed: unverified sources must not become evidence.
+            # Accepting everything here previously let weak/unverified web
+            # results flow into citations and answers.
             logger.exception("Source verification failed")
             verification_result = {
-                "verified_sources": final_results,
-                "accepted_sources": final_results,
-                "rejected_sources": [],
+                "verified_sources": [],
+                "accepted_sources": [],
+                "rejected_sources": final_results,
                 "summary": {},
             }
 
@@ -599,20 +627,27 @@ class WebRAGService:
         ]
 
         # Apply unified evidence gate (min_chunks=1 for web evidence —
-        # a single authoritative web source can be sufficient)
+        # a single authoritative web source can be sufficient).
+        # P1: an explicit query state beats an inherited session value
+        # here too, so a stale session can no longer smuggle the wrong
+        # state past the gate.
         try:
             gate_abstained, gate_reason, gate_band = evidence_gate(
                 evidence_chunks,
                 expected_domain=classification_data.get("domain", effective_domain),
-                expected_state=state or classification_data.get("state"),
+                expected_state=resolve_expected_state(
+                    state, classification
+                ),
                 min_chunks=1,
             )
         except Exception:
+            # Fail closed (mirrors StaticRAGService): a crashed gate must
+            # abstain, never emit evidence as sufficient.
             logger.exception("Evidence gate failed")
             gate_abstained, gate_reason, gate_band = (
-                False,
-                None,
-                ConfidenceBand.MEDIUM,
+                True,
+                AbstentionReason.CITATION_FAILURE,
+                ConfidenceBand.LOW,
             )
 
         logger.info(

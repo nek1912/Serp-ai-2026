@@ -397,6 +397,11 @@ class EvidenceBundle(BaseModel):
     query_requirements: QueryRequirements
     query: str
     query_id: str | None = None
+    # Facet-aware retrieval (Task 4, I1): per-facet chunk groups + coverage.
+    # Optional so single-path constructions stay unchanged; when None the
+    # prompt renders legacy flat sections byte-identically.
+    facet_groups: dict[str, list[EvidenceChunk]] | None = None
+    facet_coverage: dict | None = None
 
 
 class FlaggedClaim(BaseModel):

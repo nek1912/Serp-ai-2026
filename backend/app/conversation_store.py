@@ -16,7 +16,21 @@ def create_conversation(user_id: str, title: str = "New Chat") -> dict:
 
 def ensure_conversation(conversation_id: str, user_id: str) -> None:
     """Insert a conversations row if one with this id doesn't exist yet.
-    Swallow DB errors in test environments where Supabase is unavailable."""
+
+    Ownership gate (mirrors session_store.touch_session): when a row
+    already exists but is owned by someone else, this is a no-op — never
+    overwrite another owner's conversation. Swallow DB errors in test
+    environments where Supabase is unavailable.
+    """
+    try:
+        existing = get_conversation(conversation_id)
+    except Exception:
+        existing = None
+    # Only a real dict row counts as existing (MagicMock supabase stubs in
+    # tests return non-dict truthy values — treat those as missing so the
+    # upsert path is exercised).
+    if isinstance(existing, dict) and existing.get("user_id") != user_id:
+        return
     sb = get_supabase()
     try:
         sb.table("conversations").upsert(
@@ -52,6 +66,19 @@ def get_conversation(conversation_id: str) -> dict | None:
               .execute())
     rows = result.data or []
     return rows[0] if rows else None
+
+
+def get_owned_conversation(conversation_id: str, user_id: str) -> dict | None:
+    """Return the conversation only when it is owned by user_id.
+
+    Missing and forbidden collapse to None so routes answer 404 without
+    revealing whether another user's resource exists. Never trust a
+    client-supplied user_id — callers must pass the authenticated sub.
+    """
+    conv = get_conversation(conversation_id)
+    if not conv or conv.get("user_id") != user_id:
+        return None
+    return conv
 
 
 def rename_conversation(conversation_id: str, title: str) -> bool:

@@ -37,6 +37,8 @@ from app.contracts import (
     RAGResponse,
     RAGResult,
 )
+from app.domains import get_anchor_store
+from app.facets import Facet, select_coverage, split_facets
 from app.evidence_controller import EvidenceController, QueryRequirementClassifier, strip_citations, clean_answer
 from app.llm_fallback import AllProvidersFailedError, grounded_answer
 from app.scenario_reasoning import QueryComplexityClassifier
@@ -47,7 +49,11 @@ from app.services.static_rag import StaticRAGService
 from app.services.web_rag import WebRAGService
 from app.speech_text import prepare_speech_text, segment_speech
 from app.ui import get_abstain_text
-from app.web_rag.query_classifier import QueryClassification
+from app.web_rag.query_classifier import (
+    QueryClassification,
+    effective_domain,
+    resolve_expected_state,
+)
 from app.web_rag.referrals import build_referral
 
 logger = logging.getLogger(__name__)
@@ -176,7 +182,9 @@ class RAGOrchestrator:
         Returns:
             RAGResponse with answer, citations, confidence, and speech data.
         """
-        self._user_lang = lang
+        # NOTE: no per-request state is stored on self — the singleton is
+        # shared across concurrent requests. `lang`/`session_id` travel as
+        # explicit arguments only.
         logger.info(
             "RAGOrchestrator.run: domain=%s state=%s lang=%s session=%s",
             domain, state, lang, session_id,
@@ -185,22 +193,54 @@ class RAGOrchestrator:
         if classification is None:
             classification = self._web_rag.web_discovery.classifier.classify(english_query, default_state=state)
 
-        if (not domain or domain == "general") and classification and classification.domain != "general":
-            domain = classification.domain
+        # P1: single effective-domain rule (shared with WebRAGService):
+        # the AnchorStore domain wins when specific; the classifier only
+        # fills in for empty/general anchors. Both pipelines then plan
+        # and filter on the same domain for the same query.
+        domain = effective_domain(domain, classification)
+        # P1: an explicit state word in the query beats an inherited
+        # session value for evidence filtering (static and web alike).
+        state = resolve_expected_state(state, classification)
+
+        # Facet-aware retrieval: decompose multi-domain queries into
+        # per-domain facets. A single facet proceeds exactly as today
+        # (same _run_pipelines, same _merge_evidence, same static k=25).
+        try:
+            _hits = get_anchor_store().collect_hits(english_query)
+        except Exception:
+            logger.exception("Facet anchor lookup failed; falling back to single domain")
+            _hits = [domain]
+        try:
+            _complexity = self._complexity_classifier.classify(english_query, lang).value
+        except Exception:
+            logger.exception("Complexity classification failed; assuming simple")
+            _complexity = "simple"
+        _facets = split_facets(english_query, _hits, classification, _complexity, state)
+        _facet_merged: list[EvidenceChunk] | None = None
+        _facet_coverage: dict | None = None
 
         # Step 1: Classify query requirements
         query_requirements = self._query_classifier.classify(query, lang)
 
         # Step 2: Run pipelines based on mode
-        static_result, web_result = await self._run_pipelines(
-            english_query=english_query,
-            embedding=embedding,
-            domain=domain,
-            state=state,
-            classification=classification,
-            mode=pipeline_mode or "rag_web",
-            as_of_date=as_of_date,
-        )
+        if len(_facets) == 1:
+            static_result, web_result = await self._run_pipelines(
+                english_query=english_query,
+                embedding=embedding,
+                domain=domain,
+                state=state,
+                classification=classification,
+                mode=pipeline_mode or "rag_web",
+                as_of_date=as_of_date,
+            )
+        else:
+            static_result, web_result, _facet_merged, _facet_coverage = await self._run_facet_pipelines(
+                facets=_facets,
+                embedding=embedding,
+                classification=classification,
+                mode=pipeline_mode or "rag_web",
+                as_of_date=as_of_date,
+            )
         web_total_ms = float(web_result.metadata.get("web_total_ms", 0.0))
 
         if on_step:
@@ -245,6 +285,33 @@ class RAGOrchestrator:
         bundle = self._evidence_controller.build_bundle(
             static_result, web_result, query_requirements, query,
         )
+        # I1: wire facet groups + coverage into the bundle/prompt so the
+        # merged list (citations/grounding) and the prompt stay consistent.
+        # Single-facet path leaves these None → legacy flat prompt.
+        _prompt_facet_groups: dict | None = None
+        if _facet_coverage is not None:
+            _raw_groups = web_result.metadata.get("facet_groups")
+            if isinstance(_raw_groups, dict) and _facet_merged is not None:
+                _merged_ids_by_facet: dict[str, set[str]] = {}
+                for _fid, _chunks in _raw_groups.items():
+                    try:
+                        _merged_ids_by_facet[_fid] = {c.chunk_id for c in (_chunks or [])}
+                    except Exception:
+                        _merged_ids_by_facet[_fid] = set()
+                _prompt_facet_groups = {}
+                for _fid in _raw_groups.keys():
+                    _ids = _merged_ids_by_facet.get(_fid, set())
+                    _prompt_facet_groups[_fid] = [c for c in _facet_merged if c.chunk_id in _ids]
+                # Preserve facets with zero merged chunks (unsupported → sentinel).
+                for _fid in _raw_groups.keys():
+                    _prompt_facet_groups.setdefault(_fid, [])
+            elif isinstance(_raw_groups, dict):
+                _prompt_facet_groups = _raw_groups
+            try:
+                bundle.facet_groups = _prompt_facet_groups
+                bundle.facet_coverage = _facet_coverage
+            except Exception:
+                logger.exception("Failed to attach facet groups to bundle")
 
         # Step 5: Assess evidence
         assessment = self._evidence_controller.assess_evidence(
@@ -252,11 +319,18 @@ class RAGOrchestrator:
         )
 
         # Step 6: Build curated prompt with source-priority rules
+        # Pass the real response language so the LLM writes directly in
+        # the user's language (translation in chat.py is only a safety
+        # net). Hard-coding "en" here forced every non-English answer
+        # through Sarvam→Azure, turning any translation outage into a
+        # user-facing English leak.
         _t_prompt_start = time.monotonic()
         system_prompt, user_prompt = self._evidence_controller.build_curated_prompt(
-            bundle, english_query, history, "en",
+            bundle, english_query, history, lang,
             language_mix=language_mix,
             assessment=assessment,
+            facet_groups=_prompt_facet_groups,
+            facet_coverage=_facet_coverage,
         )
         _t_prompt_ready = time.monotonic()
         prompt_build_ms = (_t_prompt_ready - _t_prompt_start) * 1000
@@ -297,7 +371,11 @@ class RAGOrchestrator:
             # decided against retrieved evidence, so this weakens nothing.
             answer = normalize_citation_markers(answer)
         except AllProvidersFailedError:
-            logger.exception("All LLM providers failed")
+            logger.exception(
+                "All LLM providers failed: retrieval had static=%d (band=%s) web=%d (band=%s) domain=%s lang=%s — abstaining PROVIDER_UNAVAILABLE",
+                len(static_result.chunks), static_result.band,
+                len(web_result.chunks), web_result.band, domain, lang,
+            )
             return self._abstain_response(
                 lang=lang,
                 reason=AbstentionReason.PROVIDER_UNAVAILABLE,
@@ -305,8 +383,16 @@ class RAGOrchestrator:
                 session_id=session_id,
             )
 
-        # Step 8: Auto-append citations if missing and clean non-citation markers
-        all_chunks = self._merge_evidence(static_result.chunks, web_result.chunks)
+        # Step 8: Auto-append citations if missing and clean non-citation markers.
+        # Only gate-passing pipelines contribute citable evidence: chunks
+        # from an abstained pipeline failed domain/jurisdiction/count/
+        # score checks and must not become citable downstream.
+        usable_static = static_result.chunks if not static_result.abstained else []
+        usable_web = web_result.chunks if not web_result.abstained else []
+        if _facet_merged is not None:
+            all_chunks = _facet_merged
+        else:
+            all_chunks = self._merge_evidence(usable_static, usable_web)
         answer = self._auto_append_citations(answer, all_chunks)
 
         # Step 9: Verify citations against evidence, with auto-repair.
@@ -328,13 +414,26 @@ class RAGOrchestrator:
         # allowlist them so a correct answer naming the official portal
         # does not fail verification. Non-evidence URLs still fail.
         allowed_urls = {chunk.url for chunk in all_chunks if chunk.url}
-        citation_verification = verify_citations(
-            answer, all_chunk_ids, allowed_urls=allowed_urls,
-        )
+        try:
+            citation_verification = verify_citations(
+                answer, all_chunk_ids, allowed_urls=allowed_urls,
+            )
+        except Exception:
+            logger.exception(
+                "Citation verification crashed: retrieval had static=%d web=%d domain=%s lang=%s — abstaining CITATION_FAILURE",
+                len(static_result.chunks), len(web_result.chunks), domain, lang,
+            )
+            return self._abstain_response(
+                lang=lang,
+                reason=AbstentionReason.CITATION_FAILURE,
+                domain=domain,
+                session_id=session_id,
+            )
         if not citation_verification.is_valid:
             logger.warning(
-                "Citation verification failed: reason=%s invalid_prefixes=%s — performing auto-repair",
+                "Citation verification failed: reason=%s invalid_prefixes=%s static=%d web=%d domain=%s lang=%s — performing auto-repair",
                 citation_verification.reason, citation_verification.invalid_prefixes,
+                len(static_result.chunks), len(web_result.chunks), domain, lang,
             )
             # Repair invalid prefixes if present
             for prefix in citation_verification.invalid_prefixes:
@@ -342,13 +441,31 @@ class RAGOrchestrator:
             
             # Re-ensure valid citations from retrieved chunks
             answer = self._auto_append_citations(answer, all_chunks, force=True)
-            citation_verification = verify_citations(
-                answer, all_chunk_ids, allowed_urls=allowed_urls,
-            )
+            try:
+                citation_verification = verify_citations(
+                    answer, all_chunk_ids, allowed_urls=allowed_urls,
+                )
+            except Exception:
+                logger.exception(
+                    "Citation re-verification crashed: static=%d web=%d domain=%s lang=%s — abstaining CITATION_FAILURE",
+                    len(static_result.chunks), len(web_result.chunks), domain, lang,
+                )
+                return self._abstain_response(
+                    lang=lang,
+                    reason=AbstentionReason.CITATION_FAILURE,
+                    domain=domain,
+                    session_id=session_id,
+                )
 
             # Persistent citation failure is a safe failure even when chunks
             # exist: the generated markers do not map to retrieved evidence.
             if not citation_verification.is_valid:
+                logger.warning(
+                    "Persistent citation failure: reason=%s static=%d (band=%s) web=%d (band=%s) domain=%s lang=%s — abstaining",
+                    citation_verification.reason,
+                    len(static_result.chunks), static_result.band,
+                    len(web_result.chunks), web_result.band, domain, lang,
+                )
                 return self._abstain_response(
                     lang=lang,
                     reason=citation_verification.reason or AbstentionReason.CITATION_FAILURE,
@@ -360,33 +477,62 @@ class RAGOrchestrator:
         # Unsupported factual claims must not survive into a HIGH-confidence
         # answer: deterministically repair using existing evidence, re-verify,
         # and safe-abstain if claims persist or nothing supportable remains.
+        # Verifier crashes fail closed — never a substantive answer.
         _t_grounding_start = time.monotonic()
-        grounding_result = verify_answer_grounding(
-            answer,
-            all_chunks,
-            use_llm_verification=self._settings.answer_grounding_llm_enabled,
-            settings=self._settings,
-        )
-        if grounding_result.has_unsupported_claims:
-            logger.warning(
-                "Grounding check found %d unsupported claims: %s",
-                len(grounding_result.unsupported_claims),
-                [c.claim_text for c in grounding_result.unsupported_claims],
-            )
-            repaired = self._repair_unsupported_claims(
-                answer, grounding_result.unsupported_claims,
-            )
-            recheck = verify_answer_grounding(
-                repaired,
+        grounding_repaired = False
+        try:
+            grounding_result = verify_answer_grounding(
+                answer,
                 all_chunks,
                 use_llm_verification=self._settings.answer_grounding_llm_enabled,
                 settings=self._settings,
             )
+        except Exception:
+            logger.exception(
+                "Answer grounding verification crashed: static=%d web=%d domain=%s lang=%s — abstaining INSUFFICIENT_EVIDENCE",
+                len(static_result.chunks), len(web_result.chunks), domain, lang,
+            )
+            return self._abstain_response(
+                lang=lang,
+                reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                domain=domain,
+                session_id=session_id,
+            )
+        if grounding_result.has_unsupported_claims:
+            logger.warning(
+                "Grounding check found %d unsupported claims: %s static=%d (band=%s) web=%d (band=%s) domain=%s lang=%s",
+                len(grounding_result.unsupported_claims),
+                [c.claim_text for c in grounding_result.unsupported_claims],
+                len(static_result.chunks), static_result.band,
+                len(web_result.chunks), web_result.band, domain, lang,
+            )
+            try:
+                repaired = self._repair_unsupported_claims(
+                    answer, grounding_result.unsupported_claims,
+                )
+                recheck = verify_answer_grounding(
+                    repaired,
+                    all_chunks,
+                    use_llm_verification=self._settings.answer_grounding_llm_enabled,
+                    settings=self._settings,
+                )
+            except Exception:
+                logger.exception(
+                    "Grounding re-verification crashed: static=%d web=%d domain=%s lang=%s — abstaining INSUFFICIENT_EVIDENCE",
+                    len(static_result.chunks), len(web_result.chunks), domain, lang,
+                )
+                return self._abstain_response(
+                    lang=lang,
+                    reason=AbstentionReason.INSUFFICIENT_EVIDENCE,
+                    domain=domain,
+                    session_id=session_id,
+                )
             if recheck.has_unsupported_claims:
                 logger.warning(
-                    "Grounding repair incomplete, %d claim(s) still unsupported: %s — abstaining",
+                    "Grounding repair incomplete, %d claim(s) still unsupported: %s static=%d web=%d domain=%s lang=%s — abstaining",
                     len(recheck.unsupported_claims),
                     [c.claim_text for c in recheck.unsupported_claims],
+                    len(static_result.chunks), len(web_result.chunks), domain, lang,
                 )
                 return self._abstain_response(
                     lang=lang,
@@ -397,7 +543,8 @@ class RAGOrchestrator:
             cleaned_repaired, _ = strip_citations(repaired)
             if not cleaned_repaired.strip():
                 logger.warning(
-                    "Grounding repair left no supportable answer — abstaining",
+                    "Grounding repair left no supportable answer — abstaining static=%d web=%d domain=%s lang=%s",
+                    len(static_result.chunks), len(web_result.chunks), domain, lang,
                 )
                 return self._abstain_response(
                     lang=lang,
@@ -411,6 +558,7 @@ class RAGOrchestrator:
             )
             answer = repaired
             grounding_result = recheck
+            grounding_repaired = True
         grounding_ms = (time.monotonic() - _t_grounding_start) * 1000
 
         if on_step:
@@ -424,10 +572,18 @@ class RAGOrchestrator:
         answer = fix_broken_tables(answer)
 
         # Step 11: Calculate confidence
+        # Grounding repair caps the user-facing confidence: retrieval may be
+        # HIGH but the final answer lost content, so it must not claim HIGH.
         confidence, confidence_band = self._calculate_confidence(
             static_result, web_result, has_static, has_web,
             [],  # No claim verifications
+            grounding_repaired=grounding_repaired,
         )
+        # Facet coverage penalty: scale confidence by the fraction of
+        # supported facets. Fully supported coverage leaves confidence
+        # unchanged; fully unsupported halves it.
+        if _facet_coverage:
+            confidence = self._apply_facet_coverage_penalty(confidence, _facet_coverage)
 
         # Step 12: Build citations list
         citations = self._build_citations(all_chunks)
@@ -649,6 +805,192 @@ class RAGOrchestrator:
 
         return static_result, web_result
 
+    async def _run_facet_pipelines(
+        self,
+        facets: list[Facet],
+        embedding: list[float],
+        classification: QueryClassification | None,
+        mode: str | None = None,
+        as_of_date: str | None = None,
+    ) -> tuple[RAGResult, RAGResult, list[EvidenceChunk], dict]:
+        """Run per-facet static (+ bounded web) retrieval with coverage selection.
+
+        Each facet calls the existing ``StaticRAGService.retrieve``
+        sequentially (``k=10``). At most 2 facets with no usable static
+        evidence get a web call, all sharing one outer deadline
+        (``started + web_rag_timeout_s``). Per-facet failures yield empty
+        chunk lists (unsupported facet), never a pipeline-wide exception.
+        Only gate-passing (non-abstained) facet results contribute usable
+        chunks, mirroring the single-path ``usable_*`` semantics. No new
+        executors; sync services run via ``asyncio.to_thread`` like the
+        legacy path.
+        """
+        from app.providers.embeddings import get_embedding_provider
+
+        started = time.monotonic()
+        facet_deadline = started + self._settings.web_rag_timeout_s
+
+        # Facet query embeddings, cached per distinct facet query (max 3
+        # calls). Falls back to the original query embedding on failure so
+        # a transient embedding error does not orphan the facet.
+        _emb_cache: dict[str, list[float]] = {}
+
+        def _facet_embedding(facet_query: str) -> list[float]:
+            if facet_query not in _emb_cache:
+                try:
+                    vecs = get_embedding_provider().embed_texts([facet_query])
+                    _emb_cache[facet_query] = list(vecs[0])
+                except Exception:
+                    logger.exception("Facet embedding failed; reusing query embedding")
+                    _emb_cache[facet_query] = list(embedding)
+            return _emb_cache[facet_query]
+
+        per_facet_usable_static: dict[str, list[EvidenceChunk]] = {}
+        per_facet_usable_web: dict[str, list[EvidenceChunk]] = {}
+        static_usable: list[EvidenceChunk] = []
+        web_usable: list[EvidenceChunk] = []
+        static_bands: list[ConfidenceBand] = []
+        web_bands: list[ConfidenceBand] = []
+        static_reason: AbstentionReason | None = None
+        web_reason: AbstentionReason | None = None
+
+        for facet in facets:
+            fid = facet.facet_id
+            if mode == "web":
+                per_facet_usable_static[fid] = []
+                continue
+            try:
+                res = await asyncio.to_thread(
+                    self._static_rag.retrieve,
+                    embedding=_facet_embedding(facet.query),
+                    query=facet.query,
+                    domain=facet.domain,
+                    state=facet.state,
+                    k=10,
+                    as_of_date=as_of_date,
+                )
+            except Exception:
+                logger.exception("Facet static retrieval failed: facet=%s", fid)
+                res = RAGResult(
+                    chunks=[], abstained=True,
+                    reason=AbstentionReason.PROVIDER_UNAVAILABLE,
+                    domain=facet.domain,
+                )
+            usable = list(res.chunks) if not res.abstained else []
+            per_facet_usable_static[fid] = usable
+            static_usable.extend(usable)
+            if usable and res.band is not None:
+                static_bands.append(res.band)
+            if static_reason is None and res.reason is not None:
+                static_reason = res.reason
+
+        if mode != "static":
+            needing_web = [f for f in facets if not per_facet_usable_static.get(f.facet_id)][:2]
+            for facet in needing_web:
+                fid = facet.facet_id
+                remaining = facet_deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "Facet web budget exhausted; facet=%s left unsupported", fid,
+                    )
+                    per_facet_usable_web[fid] = []
+                    continue
+                try:
+                    wres = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self._web_rag.retrieve,
+                            query=facet.query,
+                            domain=facet.domain,
+                            state=facet.state,
+                            classification=classification,
+                            as_of_date=as_of_date,
+                            deadline=facet_deadline,
+                        ),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Facet web timed out: facet=%s", fid)
+                    wres = RAGResult(
+                        chunks=[], abstained=True,
+                        reason=AbstentionReason.PROVIDER_UNAVAILABLE,
+                        domain=facet.domain,
+                    )
+                except Exception:
+                    logger.exception("Facet web retrieval failed: facet=%s", fid)
+                    wres = RAGResult(
+                        chunks=[], abstained=True,
+                        reason=AbstentionReason.PROVIDER_UNAVAILABLE,
+                        domain=facet.domain,
+                    )
+                usable = list(wres.chunks) if not wres.abstained else []
+                per_facet_usable_web[fid] = usable
+                web_usable.extend(usable)
+                if usable and wres.band is not None:
+                    web_bands.append(wres.band)
+                if web_reason is None and wres.reason is not None:
+                    web_reason = wres.reason
+        for facet in facets:
+            per_facet_usable_web.setdefault(facet.facet_id, [])
+
+        facet_chunks = {
+            f.facet_id: per_facet_usable_static.get(f.facet_id, [])
+            + per_facet_usable_web.get(f.facet_id, [])
+            for f in facets
+        }
+        merged, coverage = select_coverage(facet_chunks)
+
+        static_result = RAGResult(
+            chunks=static_usable,
+            abstained=len(static_usable) == 0,
+            reason=None if static_usable else (static_reason or AbstentionReason.NO_ELIGIBLE_SOURCE),
+            band=self._best_band(static_bands),
+            domain=facets[0].domain if facets else "",
+        )
+        static_result.metadata["retrieval_ms"] = (time.monotonic() - started) * 1000
+        web_result = RAGResult(
+            chunks=web_usable,
+            abstained=len(web_usable) == 0,
+            reason=None if web_usable else (web_reason or AbstentionReason.NO_ELIGIBLE_SOURCE),
+            band=self._best_band(web_bands),
+            domain=facets[0].domain if facets else "",
+        )
+        web_result.metadata["web_total_ms"] = (time.monotonic() - started) * 1000
+        web_result.metadata["facet_coverage"] = coverage
+        # I1: keep per-facet groups for prompt wiring (citations keep merged).
+        web_result.metadata["facet_groups"] = facet_chunks
+        return static_result, web_result, merged, coverage
+
+    @staticmethod
+    def _best_band(bands: list[ConfidenceBand]) -> ConfidenceBand | None:
+        """Return the highest confidence band, or None when empty."""
+        order = {"low": 0, "medium": 1, "high": 2}
+        best: ConfidenceBand | None = None
+        for b in bands:
+            if b is None:
+                continue
+            if best is None or order.get(getattr(b, "value", ""), -1) > order.get(
+                getattr(best, "value", ""), -1
+            ):
+                best = b
+        return best
+
+    @staticmethod
+    def _apply_facet_coverage_penalty(confidence: float, coverage: dict) -> float:
+        """Scale confidence by the fraction of supported facets.
+
+        ``confidence * (0.5 + 0.5 * supported / total)``, rounded to 2
+        decimals. Fully supported coverage is a no-op; fully unsupported
+        halves the confidence.
+        """
+        total = len(coverage)
+        if total == 0:
+            return confidence
+        supported = sum(
+            1 for v in coverage.values()
+            if isinstance(v, dict) and v.get("status") == "supported"
+        )
+        return round(confidence * (0.5 + 0.5 * supported / total), 2)
+
     def _merge_evidence(
         self,
         static_chunks: list[EvidenceChunk],
@@ -659,17 +1001,29 @@ class RAGOrchestrator:
         Static chunks (official documents) get an authority boost.
         Weak web results cannot displace stronger static evidence.
         Deduplicates by chunk_id.
+
+        Cap is top 6 static + top 6 web = max 12: retrieval fetches
+        25 static + 8 web for recall, but only the best per-source
+        chunks become citable downstream. Per-source caps also avoid
+        cross-scale sorting (static cosine 0-1 vs web rerank 0-100)
+        letting one source dominate the merged list.
         """
         AUTHORITY_BOOST_STATIC = 0.05
+        MAX_PER_SOURCE = 6
+        MAX_MERGED = 12
+
+        # Per-source top-N (retrieval order is already ranked).
+        top_static = list(static_chunks[:MAX_PER_SOURCE])
+        top_web = list(web_chunks[:MAX_PER_SOURCE])
 
         # Deduplicate by chunk_id, keeping the best score
         seen: dict[str, EvidenceChunk] = {}
-        for chunk in static_chunks:
+        for chunk in top_static:
             scored = (chunk.dense_score or 0) + AUTHORITY_BOOST_STATIC
             existing = seen.get(chunk.chunk_id)
             if not existing or scored > ((existing.dense_score or 0) + AUTHORITY_BOOST_STATIC):
                 seen[chunk.chunk_id] = chunk
-        for chunk in web_chunks:
+        for chunk in top_web:
             existing = seen.get(chunk.chunk_id)
             if not existing or (chunk.dense_score or 0) > (existing.dense_score or 0):
                 seen[chunk.chunk_id] = chunk
@@ -678,11 +1032,11 @@ class RAGOrchestrator:
         merged = sorted(
             seen.values(),
             key=lambda c: -(c.dense_score or 0),
-        )
+        )[:MAX_MERGED]
 
         logger.info(
-            "Merged evidence: %d static + %d web = %d total (after dedup+rank)",
-            len(static_chunks), len(web_chunks), len(merged),
+            "Merged evidence: %d static + %d web = %d total (after dedup+rank, capped to %d)",
+            len(static_chunks), len(web_chunks), len(merged), MAX_MERGED,
         )
         return merged
 
@@ -727,6 +1081,9 @@ class RAGOrchestrator:
 
         Reuses the pre-existing sentence-removal repair (no LLM call).
         Operates on the actual extracted claims, not arbitrary words.
+        No ``\\b`` word-boundary anchors: claims such as ``12%`` or
+        ``Rs.750`` end in non-word characters, where ``\\b`` never matches
+        and the sentence silently survived repair.
         """
         for claim in unsupported_claims:
             claim_text = getattr(claim, "claim_text", str(claim))
@@ -734,7 +1091,7 @@ class RAGOrchestrator:
                 continue
             # Remove the sentence containing the unsupported claim.
             answer = re.sub(
-                rf"[^.]*\b{re.escape(claim_text)}\b[^.]*\.",
+                rf"[^.]*{re.escape(claim_text)}[^.]*\.",
                 "",
                 answer,
             )
@@ -798,6 +1155,7 @@ class RAGOrchestrator:
         has_static: bool,
         has_web: bool,
         claim_verifications: list | None = None,
+        grounding_repaired: bool = False,
     ) -> tuple[float, ConfidenceBand]:
         """Compute claim-level confidence score and band from evidence.
 
@@ -805,6 +1163,11 @@ class RAGOrchestrator:
         - Number of unsupported claims (lower confidence)
         - Number of filtered claims (lower confidence)
         - Source quality (static + web dual-source boost)
+
+        grounding_repaired caps a repaired-but-supportable answer at MEDIUM:
+        retrieval may be HIGH, but the final answer lost unsupported content,
+        so the user-facing confidence must not claim HIGH. MEDIUM/LOW pass
+        through unchanged (never upgraded).
         """
         # Static confidence from evidence gate band
         static_band = static_result.band
@@ -846,6 +1209,13 @@ class RAGOrchestrator:
             band = ConfidenceBand.MEDIUM
         else:
             band = ConfidenceBand.LOW
+
+        # Grounding repair invariant: a repaired answer must not retain HIGH.
+        # Cap at 0.6 / MEDIUM (below the 0.7 HIGH threshold); leave
+        # MEDIUM/LOW untouched so no upgrade can occur.
+        if grounding_repaired and band == ConfidenceBand.HIGH:
+            confidence = min(confidence, 0.6)
+            band = ConfidenceBand.MEDIUM
 
         return round(confidence, 2), band
 

@@ -67,8 +67,9 @@ class StaticRAGService:
             query: English query text.
             domain: Requested domain (raw, before _DOMAIN_MAP).
             state: Requested state filter (or None for central only).
-            k: Number of chunks to retrieve. Defaults to 25 if reranker
-               enabled, else 6.
+            k: Number of chunks to retrieve. Defaults to 25 (the old
+               25-if-reranked-else-6 split was removed; retrieval always
+               fetches 25 and the reranker truncates to top_n=15).
             as_of_date: Optional ISO date for effective-date filtering at
                 the SQL layer (passed through to match_chunks).
 

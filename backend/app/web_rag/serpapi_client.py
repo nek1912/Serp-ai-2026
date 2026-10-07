@@ -35,6 +35,10 @@ SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
 DEFAULT_TIMEOUT_SECONDS = 5
 DEFAULT_MAX_RESULTS = 20
 MAX_API_KEYS = 2
+# Bounded site: filters appended to the Google query when the caller passes
+# include/exclude domains (branch anchor scoping). Keeps q deterministic and
+# short; the official-only stage still enforces filtering downstream.
+MAX_DOMAIN_FILTERS = 8
 
 
 class SerpApiConfigurationError(RuntimeError):
@@ -79,6 +83,48 @@ class SerpApiClient:
                 "No SerpApi API key is configured. "
                 "Set SERPAPI_API_KEY_1 and optionally SERPAPI_API_KEY_2 in the backend .env file."
             )
+
+    @staticmethod
+    def _clean_domains(values: Any) -> list[str]:
+        """Sanitize a domain list for site: filters (dedupe, bounded)."""
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        if not isinstance(values, (list, tuple)):
+            return cleaned
+        for value in values:
+            domain = str(value or "").strip().lower()
+            # Tolerate full URLs in branch specs: keep host only.
+            if "://" in domain:
+                domain = domain.split("://", 1)[1].split("/", 1)[0]
+            domain = domain.split("/", 1)[0].split(":", 1)[0].removeprefix("www.").rstrip(".")
+            if not domain or "." not in domain or domain in seen:
+                continue
+            seen.add(domain)
+            cleaned.append(domain)
+            if len(cleaned) >= MAX_DOMAIN_FILTERS:
+                break
+        return cleaned
+
+    def _apply_domain_filters(
+        self,
+        enriched_query: str,
+        include_domains: Optional[list[str]] = None,
+        exclude_domains: Optional[list[str]] = None,
+    ) -> str:
+        """Honor the provider-contract domain params in the Google query.
+
+        SerpApi has no server-side include_domains parameter (unlike
+        Tavily), so anchor scoping is encoded as bounded site:/-site:
+        clauses. The official-only stage still filters downstream.
+        """
+        includes = self._clean_domains(include_domains)
+        excludes = self._clean_domains(exclude_domains)
+        parts = [enriched_query]
+        if includes:
+            parts.append("(" + " OR ".join(f"site:{d}" for d in includes) + ")")
+        if excludes:
+            parts.append(" ".join(f"-site:{d}" for d in excludes))
+        return " ".join(p for p in parts if p)
 
     def _build_enriched_query(
         self,
@@ -133,6 +179,9 @@ class SerpApiClient:
         self.require_configuration()
 
         enriched_query = self._build_enriched_query(query, domain, state)
+        enriched_query = self._apply_domain_filters(
+            enriched_query, include_domains, exclude_domains
+        )
         max_results = max(1, min(int(max_results), 20))
 
         errors: List[str] = []
@@ -153,7 +202,11 @@ class SerpApiClient:
                 continue
 
             if response.status_code == 429:
-                errors.append(f"key_{key_index + 1}: HTTP 429 rate limited")
+                body = response.text[:500]
+                retry_after = response.headers.get("retry-after", "")
+                extra = f" retry-after={retry_after}" if retry_after else ""
+                detail = f": {body}" if body.strip() else ""
+                errors.append(f"key_{key_index + 1}: HTTP 429 rate limited{extra}{detail}")
                 continue
             if response.status_code >= 400:
                 body = response.text[:1000]
@@ -170,8 +223,19 @@ class SerpApiClient:
                 errors.append(f"key_{key_index + 1}: unexpected response format")
                 continue
 
+            error_text = str(data.get("error", "") or "").strip()
+            organic = data.get("organic_results", [])
+            if error_text:
+                unified = self._to_unified(organic) if isinstance(organic, list) else []
+                if unified:
+                    logger.warning("SerpApi returned error with partial results: %s", error_text[:300])
+                    self.active_key_index = key_index
+                    return {"results": unified}
+                errors.append(f"key_{key_index + 1}: provider error: {error_text[:500]}")
+                continue
+
             self.active_key_index = key_index
-            return {"results": self._to_unified(data.get("organic_results", []))}
+            return {"results": self._to_unified(organic if isinstance(organic, list) else [])}
 
         raise SerpApiAPIError("All configured SerpApi API keys failed. " + " | ".join(errors))
 

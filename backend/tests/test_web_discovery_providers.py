@@ -182,3 +182,33 @@ class TestConcurrency:
 
 def assert_event_set(event: threading.Event, timeout: float = 10.0) -> None:
     assert event.wait(timeout), "second provider was never invoked concurrently"
+
+
+class TestErrorSanitization:
+    def test_api_key_redacted_from_provider_error(self):
+        """SerpApi failures embed the request URL incl. api_key — logs must not."""
+        from app.web_rag.service import _sanitize_provider_error
+
+        exc = RuntimeError(
+            "RESPX: <Request('GET', 'https://serpapi.com/search.json?engine=google"
+            "&q=crop+insurance&num=10&api_key=deadbeef1234&gl=in')> not mocked!"
+        )
+        out = _sanitize_provider_error(exc)
+        assert "deadbeef1234" not in out
+        assert "api_key=[REDACTED]" in out
+        assert "serpapi.com" in out  # reason stays debuggable
+
+    def test_clean_error_passes_through(self):
+        from app.web_rag.service import _sanitize_provider_error
+
+        out = _sanitize_provider_error(RuntimeError("connection reset by peer"))
+        assert out == "connection reset by peer"
+
+    def test_failing_provider_does_not_leak_key_to_logs(self, caplog):
+        """End-to-end: a failing provider's api_key must not appear in logs."""
+        import logging
+
+        bad = FakeProvider(exc=RuntimeError("boom api_key=supersecret123&q=x"))
+        with caplog.at_level(logging.WARNING, logger="app.web_rag.service"):
+            assert _service(bad)._search_all("query") == []
+        assert "supersecret123" not in caplog.text

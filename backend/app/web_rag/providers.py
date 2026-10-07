@@ -18,11 +18,14 @@ and its normalizer stay engine-agnostic.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 from app.web_rag.firecrawl_client import (
     FirecrawlClient,
@@ -35,15 +38,29 @@ from app.web_rag.tavily_client import (
 )
 
 
-# Point at the repo-root .env explicitly. A bare load_dotenv() resolves `.env`
-# against the process CWD, so it picked up the stale backend/.env when uvicorn
-# runs from backend/ and pushed its values into os.environ — where pydantic
-# gives them priority over the env_file. That is how ALLOWED_ORIGINS reverted to
-# the old Next.js port and every cross-origin browser request was rejected.
-load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
+# backend/.env is the single source of truth (see app/config.py). Load it into
+# os.environ for the os.getenv readers below (SEARCH_PROVIDERS). It must be
+# THIS file: loading the repo-root .env instead pushed its stale
+# ALLOWED_ORIGINS into os.environ — where pydantic gives it priority over
+# backend/.env — and every cross-origin browser request was rejected.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 DEFAULT_PROVIDERS = "tavily"
+
+
+def _settings_search_providers() -> str:
+    """Settings.search_providers when available, else "".
+
+    Never raises: provider resolution must stay deterministic even when
+    Settings cannot be constructed (e.g. minimal test envs).
+    """
+    try:
+        from app.config import get_settings
+
+        return (get_settings().search_providers or "").strip()
+    except Exception:
+        return ""
 
 
 _PROVIDER_FACTORIES = {
@@ -56,13 +73,24 @@ _PROVIDER_FACTORIES = {
 def resolve_providers(
     raw: str | None = None,
 ) -> list[Any]:
-
+    # Precedence (deterministic, observable via the resolution log):
+    # explicit arg > SEARCH_PROVIDERS env > Settings.search_providers
+    # (backend/.env) > DEFAULT_PROVIDERS. Settings is the documented
+    # source of truth; env overrides it for process-level control.
+    source = "explicit"
     if raw is None:
-
-        raw = os.getenv(
-            "SEARCH_PROVIDERS",
-            "",
-        )
+        env_raw = (os.getenv("SEARCH_PROVIDERS", "") or "").strip()
+        if env_raw:
+            raw = env_raw
+            source = "env"
+        else:
+            settings_raw = _settings_search_providers()
+            if settings_raw:
+                raw = settings_raw
+                source = "settings"
+            else:
+                raw = ""
+                source = "default"
 
     raw = (raw or "").strip()
 
@@ -107,8 +135,22 @@ def resolve_providers(
 
     if not providers:
 
+        logger.warning(
+            "web providers requested raw=%r (source=%s) yielded none "
+            "(unknown names or missing keys); falling back to TavilyClient",
+            raw,
+            source,
+        )
         providers = [
             TavilyClient(),
         ]
 
+    # Observability: the effective provider set depends on config source +
+    # key presence (is_configured filtering), so log it per resolution.
+    logger.info(
+        "web providers resolved raw=%r source=%s effective=%s",
+        raw,
+        source,
+        [type(p).__name__ for p in providers],
+    )
     return providers

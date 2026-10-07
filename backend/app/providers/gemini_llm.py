@@ -69,8 +69,32 @@ class GeminiLLMProvider:
     def generate_stream(self, system: str, user: str,
                         temperature: float = 0.0) -> Generator[str, None, None]:
         """Yield text tokens as they arrive from Gemini's streaming API."""
+        if not self._key:
+            raise RuntimeError("Gemini API key not configured")
+
+        models_to_try = list(dict.fromkeys([self._model] + self._fallback_models))
+        last_exc: Exception | None = None
+        for model in models_to_try:
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:streamGenerateContent?alt=sse&key={self._key}"
+            )
+            try:
+                yield from self._do_stream(url, system, user, temperature)
+                return
+            except Exception as exc:
+                last_exc = exc
+                category = _classify_error(exc)
+                logger.warning(
+                    "Gemini stream model %s failed [%s]: %s — trying next fallback model",
+                    model, category, str(exc)[:200],
+                )
+        raise last_exc or RuntimeError("All Gemini models failed")
+
+    def _do_stream(self, url: str, system: str, user: str,
+                   temperature: float) -> Generator[str, None, None]:
         with httpx.stream(
-            "POST", f"{self._stream_url}?key={self._key}",
+            "POST", url,
             json={
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
@@ -82,8 +106,11 @@ class GeminiLLMProvider:
             for line in r.iter_lines():
                 if not line:
                     continue
+                payload = line[6:] if line.startswith("data: ") else line
+                if payload.strip() == "[DONE]":
+                    break
                 try:
-                    chunk = json.loads(line)
+                    chunk = json.loads(payload)
                     candidates = chunk.get("candidates", [])
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])

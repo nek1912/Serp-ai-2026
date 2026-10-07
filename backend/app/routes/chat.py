@@ -40,8 +40,15 @@ from app.providers.sarvam_translator import SarvamTranslator
 from app.providers.translator import AzureTranslator
 from app.resolve_response_language import resolve_and_remember
 from app.services.rag_orchestrator import RAGOrchestrator
-from app.conversation_store import ensure_conversation
-from app.session_store import get_history, get_state, save_message, touch_session, trim_messages
+from app.conversation_store import ensure_conversation, get_conversation
+from app.session_store import (
+    get_history,
+    get_session,
+    get_state,
+    save_message,
+    touch_session,
+    trim_messages,
+)
 from app.speech_text import build_grievance_speech_text, prepare_speech_text, segment_speech
 from app.ui import get_abstain_text
 from app.web_rag.query_classifier import QueryClassifier, QueryClassification, INTENT_KEYWORDS
@@ -151,10 +158,49 @@ def _get_rag_orchestrator(settings: Settings) -> RAGOrchestrator:
 # ── Grievance dispatch ─────────────────────────────────────────────────────
 
 
-def _has_active_grievance(session_id: str) -> bool:
-    """Check whether a non-complete grievance workflow exists for this session."""
+def _has_active_grievance(session_id: str, user_id: str | None = None) -> bool:
+    """Check whether a non-complete grievance workflow exists for this session.
+
+    When user_id (authenticated Clerk sub) is given, a state owned by
+    someone else collapses to False — identical to no active workflow, so
+    one user's grievance existence is never revealed to another.
+    """
     state = load_grievance_state(session_id)
-    return state is not None and not state.is_complete
+    if state is None or state.is_complete:
+        return False
+    if user_id is not None and getattr(state, "user_id", None) != user_id:
+        return False
+    return True
+
+
+def _is_chat_session_foreign(session_id: str, user_id: str) -> bool:
+    """True when the caller must NOT read/mutate this session id.
+
+    Foreign = sessions row exists but owned by someone else (legacy
+    user_id NULL counts as foreign — never guess ownership), OR a
+    conversation row exists with a different owner, OR a grievance state
+    exists with a different owner. Missing rows (fresh session) and DB
+    errors (offline/test fail-open, P0 pattern) return False.
+    """
+    try:
+        srow = get_session(session_id)
+    except Exception:
+        srow = None
+    if srow is not None and srow.get("user_id") != user_id:
+        return True
+    try:
+        crow = get_conversation(session_id)
+    except Exception:
+        crow = None
+    if crow is not None and crow.get("user_id") != user_id:
+        return True
+    try:
+        gstate = load_grievance_state(session_id)
+    except Exception:
+        gstate = None
+    if gstate is not None and getattr(gstate, "user_id", None) != user_id:
+        return True
+    return False
 
 
 def _process_grievance_message(
@@ -162,6 +208,7 @@ def _process_grievance_message(
     session_id: str,
     input_lang: str = "en",
     settings: Settings | None = None,
+    user_id: str | None = None,
 ) -> _GrievanceResult:
     """Dispatch a message through the English grievance workflow with
     clean language boundaries.
@@ -177,8 +224,13 @@ def _process_grievance_message(
     original-language description are protected during translation.
 
     The canonical ``grievance`` dict bypasses translation entirely.
+
+    Ownership: the conversation row and grievance state are always bound to
+    the authenticated Clerk sub — never to a client-supplied id. user_id=None
+    preserves the legacy offline/test path (no check).
     """
-    ensure_conversation(session_id, session_id)
+    owner = user_id if user_id is not None else session_id
+    ensure_conversation(session_id, owner)
 
     # ── INPUT BOUNDARY ─────────────────────────────────────────
     original_message = question  # preserve user's exact words
@@ -191,7 +243,7 @@ def _process_grievance_message(
     result = workflow.process_message(
         user_message=workflow_input,
         conversation_id=session_id,
-        user_id=session_id,
+        user_id=owner,
     )
 
     # Store the user's original (pre-translation) description in the
@@ -475,9 +527,16 @@ def _process_grievance_message(
         elif stage in (GrievanceStage.DRAFT_READY, GrievanceStage.SUBMISSION_GUIDE, GrievanceStage.COMPLETE):
             grievance_stage = "complete"
 
-    save_message(session_id, "user", question)
-    save_message(session_id, "assistant", response_text)
-    trim_messages(session_id, keep=50)
+    save_message(session_id, "user", question, user_id=user_id)
+    save_message(session_id, "assistant", response_text, user_id=user_id)
+    trim_messages(session_id, keep=50, user_id=user_id)
+    # Claim/refresh session ownership for grievance-only sessions (the RAG
+    # path does this via touch_session; grievance previously never touched).
+    if user_id is not None:
+        try:
+            touch_session(session_id, None, input_lang, user_id=user_id)
+        except Exception:
+            pass
     return _GrievanceResult(
         text=response_text,
         grievance=grievance_dict,
@@ -613,6 +672,24 @@ def _translate_to_english(question: str, input_lang: str, settings: Settings) ->
         return question
 
 
+def _alpha_index(index: int) -> str:
+    """0 → 'A', 25 → 'Z', 26 → 'AA', ... (digit-free placeholder suffix).
+
+    Sarvam translates with numerals_format=native, which localizes ASCII
+    digits inside placeholder tokens (e.g. TRANSLATIONCITATION12END →
+    ...१२...) so the token can no longer be restored. Alphabetic-only
+    tokens survive digit localization, matching the GRVURL scheme used
+    for grievance back-translation.
+    """
+    letters = ""
+    n = index
+    while True:
+        letters = chr(65 + n % 26) + letters
+        n = n // 26 - 1
+        if n < 0:
+            return letters
+
+
 def _translate_from_english(text: str, target_lang: str, settings: Settings) -> str:
     """Translate English text to target_lang via Sarvam → Azure fallback.
 
@@ -628,9 +705,16 @@ def _translate_from_english(text: str, target_lang: str, settings: Settings) -> 
     citation_tokens: dict[str, str] = {}
     protected_text = text
     for index, marker in enumerate(re.findall(r"\[(?:chunk|web_)[^\]]+\]", text)):
-        token = f"TRANSLATIONCITATION{index}END"
+        token = f"TRANSLATIONCITATION{_alpha_index(index)}END"
         citation_tokens[token] = marker
         protected_text = protected_text.replace(marker, token, 1)
+    # Protect raw URLs as well: translation APIs reformat/strip them, and a
+    # mutated portal URL fails post-hoc citation verification (or worse,
+    # points the citizen at the wrong address). Same digit-free scheme.
+    for index, url in enumerate(re.findall(r"(https?://[^\s\)\]\"'>]+)", protected_text)):
+        token = f"RAGURL{_alpha_index(index)}END"
+        citation_tokens[token] = url
+        protected_text = protected_text.replace(url, token, 1)
     sarvam = SarvamTranslator(settings)
     if sarvam.configured:
         try:
@@ -772,11 +856,17 @@ def _cached_embedding(query_hash: str, query: str):
 def _cached_classification(query_lower: str):
     return _get_query_classifier().classify(query_lower)
 
-async def _resolve_context(req: ChatRequest) -> _ChatContext:
-    """Detect language, translate, classify domain, disambiguate context."""
+async def _resolve_context(req: ChatRequest, user_id: str | None = None) -> _ChatContext:
+    """Detect language, translate, classify domain, disambiguate context.
+
+    When user_id is given, server-stored history/state are owner-checked:
+    foreign/legacy sessions collapse to empty/None (no oracle).
+    Client-supplied req.history (explicit) is still honoured — it is the
+    caller's own data, not a server leak.
+    """
     settings = get_settings()
     ui_code = req.language if req.ui_language_explicit else None
-    lang = resolve_and_remember(req.session_id, req.question, ui_code)
+    lang = resolve_and_remember(req.session_id, req.question, ui_code, user_id=user_id)
     detected = detect_query_languages(req.question)
     input_lang = detected.get("dominant") or "en"
     language_mix = detected.get("language_mix")
@@ -797,7 +887,7 @@ async def _resolve_context(req: ChatRequest) -> _ChatContext:
     # Classify on the translated English query for robust keyword matching
     classification = await asyncio.to_thread(_cached_classification, english_query.lower())
 
-    history = req.history if req.history is not None else get_history(req.session_id, limit=8)
+    history = req.history if req.history is not None else get_history(req.session_id, limit=8, user_id=user_id)
     
     # We use english_query for domain classification fallback inside anchor store
     domain, _score = await asyncio.to_thread(get_anchor_store().classify, english_query, embedding)
@@ -828,14 +918,18 @@ async def _resolve_context(req: ChatRequest) -> _ChatContext:
                 anchor_q = user_turns[-1]
 
             contextual_query = f"{anchor_q} {english_query}"
-            ctx_embedding = get_embedding_provider().embed_texts([contextual_query], task="retrieval.query")[0]
+            # Route through the shared embedding cache (same as the
+            # first-turn path above): the text differs so this still
+            # embeds twice per request when disambiguation triggers,
+            # but repeats across requests hit the cache instead of Jina.
+            ctx_embedding = _cached_embedding(contextual_query, contextual_query)
             ctx_domain, _ctx_score = get_anchor_store().classify(contextual_query, ctx_embedding)
             if ctx_domain != "out_of_scope":
                 domain = ctx_domain
                 english_query = contextual_query
                 embedding = ctx_embedding
 
-    resolved_state = req.state if req.state is not None else get_state(req.session_id)
+    resolved_state = req.state if req.state is not None else get_state(req.session_id, user_id=user_id)
 
     return _ChatContext(
         settings=settings,
@@ -862,18 +956,28 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
 
     try:
         # Resolve language early so the grievance path can translate input/output.
+        # Owner-namespaced: a foreign session_id reads only the caller's own
+        # (user_id, session_id) memory, never another owner's language.
         settings = get_settings()
         detected_lang = resolve_and_remember(
             req.session_id, req.question,
             req.language if req.ui_language_explicit else None,
+            user_id=user_id,
         )
 
+        # Ownership gate: foreign/legacy session ids collapse to a fresh,
+        # stateless view (no history leak, no mutation, no grievance
+        # continuation). Missing ids (fresh) proceed normally and are
+        # claimed for the caller by touch_session below.
+        foreign = _is_chat_session_foreign(req.session_id, user_id)
+
         # ── Active grievance workflow takes priority over fresh classification ──
-        if _has_active_grievance(req.session_id):
+        if not foreign and _has_active_grievance(req.session_id, user_id):
             grievance_result = _normalize_grievance_result(
                 _process_grievance_message(
                     req.question, req.session_id,
                     input_lang=detected_lang, settings=settings,
+                    user_id=user_id,
                 )
             )
             resp = {
@@ -919,12 +1023,13 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
         # This avoids external embedding/translation calls which require API keys and network access.
         raw_classification = _cached_classification(req.question.lower())
         _input_lang_early = (detect_query_languages(req.question).get("dominant") or "en")
-        if _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_early):
+        if not foreign and _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_early):
             # Process via the full grievance workflow, preserving all response fields.
             grievance_result = _normalize_grievance_result(
                 _process_grievance_message(
                     req.question, req.session_id,
                     input_lang=detected_lang, settings=settings,
+                    user_id=user_id,
                 )
             )
             resp = {
@@ -965,14 +1070,15 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 resp["grievance_finalized"] = True
             return resp
         # If not a grievance, proceed with normal context resolution.
-        ctx = await _resolve_context(req)
+        ctx = await _resolve_context(req, user_id)
 
         # Grievance queries → dedicated workflow (fallback after context)
-        if _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
+        if not foreign and _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
             grievance_result = _normalize_grievance_result(
                 _process_grievance_message(
                     req.question, req.session_id,
                     input_lang=ctx.lang, settings=ctx.settings,
+                    user_id=user_id,
                 )
             )
             resp = {
@@ -1013,14 +1119,14 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
                 resp["grievance_finalized"] = True
             return resp
 
-        touch_session(req.session_id, ctx.resolved_state, ctx.lang)
+        touch_session(req.session_id, ctx.resolved_state, ctx.lang, user_id=user_id)
 
         # Out-of-scope → abstain (no RAG needed)
         if ctx.domain == "out_of_scope":
             abstain_msg = "I am a cooperative governance assistant and can only answer questions related to cooperatives, agriculture schemes, financial inclusion, and legal provisions in India. Please ask a question within my scope."
-            save_message(req.session_id, "user", req.question)
-            save_message(req.session_id, "assistant", abstain_msg)
-            trim_messages(req.session_id, keep=50)
+            save_message(req.session_id, "user", req.question, user_id=user_id)
+            save_message(req.session_id, "assistant", abstain_msg, user_id=user_id)
+            trim_messages(req.session_id, keep=50, user_id=user_id)
             return {
                 "answer": abstain_msg, "language": ctx.lang, "domain": "out_of_scope",
                 "intent": "general", "entities": [],
@@ -1058,10 +1164,10 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
             rag_response.speech_text = prepare_speech_text(rag_response.answer)
             rag_response.speech_segments = segment_speech(rag_response.answer, ctx.lang)
 
-        # ── Session persistence ──────────────────────────────────────────
-        save_message(req.session_id, "user", req.question)
-        save_message(req.session_id, "assistant", rag_response.answer)
-        trim_messages(req.session_id, keep=50)
+        # ── Session persistence (owner-checked; foreign is a no-op) ─────
+        save_message(req.session_id, "user", req.question, user_id=user_id)
+        save_message(req.session_id, "assistant", rag_response.answer, user_id=user_id)
+        trim_messages(req.session_id, keep=50, user_id=user_id)
 
         return _rag_response_to_dict(rag_response, ctx.lang, req.session_id)
 
@@ -1219,17 +1325,21 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
             initial_msgs = _THINKING_MESSAGES.get(initial_lang, _THINKING_MESSAGES["en"])
             yield _sse_event("thinking", {"text": initial_msgs[0]})
 
+            _stream_foreign = _is_chat_session_foreign(req.session_id, user_id)
+
             # ── Active grievance workflow takes priority over fresh classification ──
-            if _has_active_grievance(req.session_id):
+            if not _stream_foreign and _has_active_grievance(req.session_id, user_id):
                 _settings = get_settings()
                 _detected_lang = resolve_and_remember(
                     req.session_id, req.question,
                     req.language if req.ui_language_explicit else None,
+                    user_id=user_id,
                 )
                 grievance_result = _normalize_grievance_result(
                     _process_grievance_message(
                         req.question, req.session_id,
                         input_lang=_detected_lang, settings=_settings,
+                        user_id=user_id,
                     )
                 )
                 meta = {
@@ -1278,16 +1388,18 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
             _detected_lang2 = resolve_and_remember(
                 req.session_id, req.question,
                 req.language if req.ui_language_explicit else None,
+                user_id=user_id,
             )
             raw_classification = _cached_classification(req.question.lower())
             _input_lang_stream_early = (detect_query_languages(req.question).get("dominant") or "en")
-            if _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_stream_early):
+            if not _stream_foreign and _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_stream_early):
                 thinking_msgs = _THINKING_MESSAGES.get(_detected_lang2, _THINKING_MESSAGES["en"])
                 yield _sse_event("thinking", {"text": thinking_msgs[0]})
                 grievance_result = _normalize_grievance_result(
                     _process_grievance_message(
                         req.question, req.session_id,
                         input_lang=_detected_lang2, settings=_settings2,
+                        user_id=user_id,
                     )
                 )
                 meta = {
@@ -1322,17 +1434,18 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
                 yield _sse_event("done", {})
                 return
 
-            ctx = await _resolve_context(req)
+            ctx = await _resolve_context(req, user_id)
             thinking_msgs = _THINKING_MESSAGES.get(ctx.lang, _THINKING_MESSAGES["en"])
 
             # Grievance → dedicated workflow (fallback after context, in case
             # contextual disambiguation in _resolve_context changes the query)
-            if _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
+            if not _stream_foreign and _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
                 yield _sse_event("thinking", {"text": thinking_msgs[0]})
                 grievance_result = _normalize_grievance_result(
                     _process_grievance_message(
                         req.question, req.session_id,
                         input_lang=ctx.lang, settings=ctx.settings,
+                        user_id=user_id,
                     )
                 )
                 meta = {
@@ -1367,15 +1480,15 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
                 yield _sse_event("done", {})
                 return
 
-            touch_session(req.session_id, ctx.resolved_state, ctx.lang)
+            touch_session(req.session_id, ctx.resolved_state, ctx.lang, user_id=user_id)
 
             # Out-of-scope → abstain
             if ctx.domain == "out_of_scope":
                 yield _sse_event("thinking", {"text": thinking_msgs[1]})
                 abstain_msg = "I am a cooperative governance assistant and can only answer questions related to cooperatives, agriculture schemes, financial inclusion, and legal provisions in India. Please ask a question within my scope."
-                save_message(req.session_id, "user", req.question)
-                save_message(req.session_id, "assistant", abstain_msg)
-                trim_messages(req.session_id, keep=50)
+                save_message(req.session_id, "user", req.question, user_id=user_id)
+                save_message(req.session_id, "assistant", abstain_msg, user_id=user_id)
+                trim_messages(req.session_id, keep=50, user_id=user_id)
                 yield _sse_event("metadata", {
                     "domain": "out_of_scope", "confidence": 0.0,
                     "confidence_level": "none", "citations": [],
@@ -1413,10 +1526,10 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
             for token in rag_response.answer.split(" "):
                 yield _sse_event("token", {"text": token + " "})
 
-            # Session persistence
-            save_message(req.session_id, "user", req.question)
-            save_message(req.session_id, "assistant", rag_response.answer)
-            trim_messages(req.session_id, keep=50)
+            # Session persistence (owner-checked; foreign is a no-op)
+            save_message(req.session_id, "user", req.question, user_id=user_id)
+            save_message(req.session_id, "assistant", rag_response.answer, user_id=user_id)
+            trim_messages(req.session_id, keep=50, user_id=user_id)
 
             yield _sse_event("metadata", {
                 "domain": rag_response.domain,

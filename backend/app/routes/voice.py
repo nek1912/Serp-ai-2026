@@ -53,11 +53,13 @@ def _lang_short(lang: str) -> str:
 
 
 @router.post("/transcribe")
-async def transcribe_audio(req: TranscribeRequest) -> dict:
+async def transcribe_audio(req: TranscribeRequest, authed_user_id: str = Depends(require_auth)) -> dict:
     """STT: Convert uploaded audio (base64) to text.
 
     This is a pure STT endpoint — no RAG, no generation.
     Delegates to the voice_service provider fallback chain.
+    Requires Clerk auth (AGENTS.md contract) so anonymous callers
+    cannot burn STT/TTS provider quota.
     """
     audio_bytes = base64.b64decode(req.audio)
     try:
@@ -68,11 +70,13 @@ async def transcribe_audio(req: TranscribeRequest) -> dict:
 
 
 @router.post("/speak")
-async def speak_text(req: SpeakRequest) -> dict:
+async def speak_text(req: SpeakRequest, authed_user_id: str = Depends(require_auth)) -> dict:
     """TTS: Convert text to speech audio (hex-encoded bytes).
 
     This is a pure TTS endpoint — no RAG, no generation.
     Delegates to the voice_service provider fallback chain.
+    Requires Clerk auth (AGENTS.md contract) so anonymous callers
+    cannot burn STT/TTS provider quota.
     """
     try:
         if req.segments:
@@ -126,7 +130,9 @@ async def voice_chat(
         session_id=session_id,
         state=state,
     )
-    rag_result = await chat_handler(chat_request)
+    # Same ownership boundary as /chat: bind the continuation to the
+    # authenticated Clerk sub (client session_id alone is not trusted).
+    rag_result = await chat_handler(chat_request, user_id)
 
     answer_text = rag_result.get("answer", "")
     # TTS must consume the citation-stripped speech copy, never the raw answer
