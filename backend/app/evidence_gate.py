@@ -20,10 +20,18 @@ from app.contracts import (
 _DOMAIN_ALIASES: dict[str, set[str]] = {
     "financial_inclusion": {"finlit", "financial_inclusion"},
     "finlit": {"finlit", "financial_inclusion"},
-    "cooperative": {"cooperative", "pacs"},
-    "pacs": {"cooperative", "pacs"},
+    # PACS family: pacs_governance/pacs_computerization/cooperative/pacs
+    # all alias to each other (same conceptual domain). Cross-aliased to
+    # pmfby/schemes/agriculture would let a PACS query accept crop-insurance
+    # chunks — fixed by this tighten (see test_gate_pacs_isolation).
+    "pacs_governance": {"pacs_governance", "pacs_computerization", "cooperative", "pacs"},
+    "pacs_computerization": {"pacs_governance", "pacs_computerization", "cooperative", "pacs"},
+    "cooperative": {"pacs_governance", "pacs_computerization", "cooperative", "pacs"},
+    "pacs": {"pacs_governance", "pacs_computerization", "cooperative", "pacs"},
+    # schemes <-> pmfby kept: corpus gap requires it.
     "schemes": {"schemes", "pmfby"},
     "pmfby": {"schemes", "pmfby"},
+    # agriculture -> pmfby kept: corpus gap requires it.
     "agriculture": {"agriculture", "pmfby"},
 }
 

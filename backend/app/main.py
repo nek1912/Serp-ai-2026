@@ -20,6 +20,20 @@ logging.basicConfig(level=logging.INFO,
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # P1: verify sessions.user_id migration applied at startup.
+    # The migration (supabase/migrations/20261007_sessions_user_id.sql)
+    # adds user_id TEXT + index; without it, session ownership checks
+    # stay disabled but visible (legacy NULL rows quarantined).
+    try:
+        from app.db import get_supabase
+        get_supabase().table("sessions").select("session_id,user_id").limit(1).execute()
+    except Exception as e:
+        if "user_id" in str(e):
+            logging.getLogger(__name__).error(
+                "sessions.user_id column missing — run supabase/migrations/20261007_sessions_user_id.sql"
+            )
+        else:
+            logging.getLogger(__name__).exception("Startup database check failed")
     yield
 
 
@@ -50,9 +64,15 @@ def health_providers() -> dict:
     return {
         "groq": "configured" if s.groq_api_key else "missing",
         "gemini": "configured" if s.gemini_api_key else "missing",
+        "jina": "configured" if s.jina_api_key else "missing",
         "supabase": "configured" if s.supabase_url else "missing",
+        # "bhashini" is a legacy key kept for contract stability; the system
+        # never integrated Bhashini (translation is Sarvam → Azure).
         "bhashini": "stub",
+        "sarvam": "configured" if s.sarvam_api_key else "missing",
         "azure_speech": "configured" if s.azure_speech_key else "missing",
         "tavily": "configured" if s.tavily_api_key_1 else "missing",
+        "serpapi": "configured" if s.serpapi_api_key_1 else "missing",
         "firecrawl": "configured" if s.firecrawl_api_key else "missing",
+        "clerk": "configured" if s.clerk_secret_key else "missing",
     }
