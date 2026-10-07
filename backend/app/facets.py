@@ -46,3 +46,30 @@ def split_facets(english_query, hits, classification, complexity, state):
     for d in uniq[:3]:
         out.append(Facet(facet_id=d, domain=d, query=_slice_query(english_query, d, state), state=state))
     return out
+
+
+def select_coverage(facet_chunks: dict[str, list]) -> tuple[list, dict]:
+    merged: list = []
+    coverage: dict = {}
+    for fid, chunks in facet_chunks.items():
+        good = [c for c in chunks if (c.dense_score or c.rerank_score or 0) >= 0.40]
+        if good:
+            status = "supported"
+        elif chunks:
+            status = "partial"
+        else:
+            status = "unsupported"
+        coverage[fid] = {"status": status, "chunk_ids": [c.chunk_id for c in chunks[:3]]}
+    # round-robin: 2 per supported facet first
+    for fid, chunks in facet_chunks.items():
+        merged.extend(chunks[:2])
+    # fill to 12 by score order
+    seen = {c.chunk_id for c in merged}
+    rest: list = []
+    for chunks in facet_chunks.values():
+        for c in chunks[2:]:
+            if c.chunk_id not in seen:
+                rest.append(c)
+    rest.sort(key=lambda c: -((c.dense_score or 0) + (c.rerank_score or 0)))
+    merged = (merged + rest)[:12]
+    return merged, coverage
