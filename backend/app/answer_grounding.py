@@ -69,9 +69,12 @@ _DATE_PATTERN = re.compile(
 _DATE_PATTERN_ALT = re.compile(r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b')
 _DATE_PATTERN_ISO = re.compile(r'\b\d{4}-\d{2}-\d{2}\b')
 
-# Named entities: PMFBY, PACS, scheme names, authorities
+# Named entities: PMFBY, PACS, scheme names, authorities. Scheme names are
+# checked as entities so a cited claim naming one scheme cannot be rescued
+# by evidence text that only names a different scheme (PMFBY ≠ RWBCIS/WBCIS/
+# UPIS/NAIS; PM-KISAN ≠ PMFBY).
 _ENTITY_PATTERN = re.compile(
-    r'\b(?:PMFBY|PACS|CSC|BDO|DM|SDM|DEO|DRDA|NABARD|SECC|NSFI|RBI|IRDAI|'
+    r'\b(?:PMFBY|RWBCIS|WBCIS|UPIS|NAIS|PM-KISAN|PMKISAN|PACS|CSC|BDO|DM|SDM|DEO|DRDA|NABARD|SECC|NSFI|RBI|IRDAI|'
     r'District Magistrate|Block Development Officer|Sub-Divisional Magistrate|'
     r'District Level Evaluation Committee|State Level Evaluation Committee|'
     r'Ministry of Cooperation|Ministry of Agriculture)\b',

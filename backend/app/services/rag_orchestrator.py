@@ -847,6 +847,9 @@ class RAGOrchestrator:
 
         per_facet_usable_static: dict[str, list[EvidenceChunk]] = {}
         per_facet_usable_web: dict[str, list[EvidenceChunk]] = {}
+        # Cache per identical (domain, query, state): overlapping facet
+        # slices otherwise run duplicate static retrievals.
+        _static_cache: dict[tuple, list[EvidenceChunk]] = {}
         static_usable: list[EvidenceChunk] = []
         web_usable: list[EvidenceChunk] = []
         static_bands: list[ConfidenceBand] = []
@@ -858,6 +861,17 @@ class RAGOrchestrator:
             fid = facet.facet_id
             if mode == "web":
                 per_facet_usable_static[fid] = []
+                continue
+            # Skip retrieval when an identical (domain, query, state) facet
+            # already ran: overlapping facet slices otherwise double the
+            # static calls and feed duplicate chunks into coverage.
+            _dup_key = (facet.domain, facet.query, facet.state)
+            if _dup_key in _static_cache:
+                _dup = _static_cache[_dup_key]
+                per_facet_usable_static[fid] = list(_dup)
+                static_usable.extend(_dup)
+                if _dup:
+                    static_bands.append(ConfidenceBand.HIGH)
                 continue
             try:
                 res = await asyncio.to_thread(
@@ -877,6 +891,7 @@ class RAGOrchestrator:
                     domain=facet.domain,
                 )
             usable = list(res.chunks) if not res.abstained else []
+            _static_cache[_dup_key] = usable
             per_facet_usable_static[fid] = usable
             static_usable.extend(usable)
             if usable and res.band is not None:

@@ -106,8 +106,18 @@ def verify_citation_ids(
     valid: list[str] = []
     invalid: list[str] = []
 
+    # Deduplicate the evidence ID list before matching: the same chunk may
+    # legitimately appear twice in the merged evidence (e.g. retrieved under
+    # two overlapping facets) and must not count as an ambiguous prefix.
+    seen_ids: set[str] = set()
+    unique_ids: list[str] = []
+    for _cid in evidence_chunk_ids:
+        if _cid not in seen_ids:
+            seen_ids.add(_cid)
+            unique_ids.append(_cid)
+
     for full_match, prefix in extract_citations_from_answer(answer):
-        matches = [cid for cid in evidence_chunk_ids if cid.startswith(prefix)]
+        matches = [cid for cid in unique_ids if cid.startswith(prefix)]
         if len(matches) == 1:
             if matches[0] not in valid:
                 valid.append(matches[0])
