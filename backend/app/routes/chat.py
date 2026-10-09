@@ -55,7 +55,7 @@ router = APIRouter()
 # normal RAG — is_grievance_query() is NOT consulted, preventing Gemini
 # misclassification from overriding a confident guidance intent.
 _GUIDANCE_INTENTS: set[str] = {
-    "APPLICATION", "ELIGIBILITY", "DOCUMENT_REQUIREMENTS",
+    "INFORMATIONAL", "APPLICATION", "ELIGIBILITY", "DOCUMENT_REQUIREMENTS",
     "REGISTRATION", "BENEFIT", "SUBSIDY_AMOUNT", "DEADLINE",
     "CONTACT", "SERVICE_ACCESS", "LOCATION", "COMPARISON",
 }

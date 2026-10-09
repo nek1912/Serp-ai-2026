@@ -267,6 +267,13 @@ export function cleanMarkdownForDisplay(text: string): string {
   cleaned = cleaned.replace(/\[chunk:[^\]]*\]/gi, "");
   cleaned = cleaned.replace(/\(chunk:[^\)]*\)/gi, "");
 
+  // Clean empty format strings leftover from citation removal (e.g. **, * *, ())
+  cleaned = cleaned.replace(/\*\s*\*/g, "");
+  cleaned = cleaned.replace(/\(\s*\)/g, "");
+
+  // Fix unclosed/orphaned single asterisks attached to words before cell boundaries or newlines
+  cleaned = cleaned.replace(/(\w+)\*\s*(?=[\|\]\)\n])/g, "$1");
+
   // Fix escaped asterisks (\*\* -> **)
   cleaned = cleaned.replace(/\\\*/g, "*");
 
@@ -419,10 +426,11 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
                     h2: ({ children }) => <h2 className="mt-5 mb-2 border-b border-[var(--border-soft)] pb-1.5 text-base font-bold text-[var(--ink)]">{children}</h2>,
                     h3: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-[var(--accent-legal)]">{children}</h3>,
                     blockquote: ({ children }) => <blockquote className="my-3 border-l-2 border-[var(--accent-legal)]/40 pl-3 italic text-[var(--text-tertiary)]">{children}</blockquote>,
-                    table: ({ children }) => <div className="my-3 overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border-soft)]"><table className="w-full min-w-[420px] border-collapse text-left text-xs">{children}</table></div>,
-                    thead: ({ children }) => <thead className="bg-[var(--cream)] text-[var(--ink)]">{children}</thead>,
-                    th: ({ children }) => <th className="border-b border-[var(--border-soft)] px-3 py-2 font-semibold">{children}</th>,
-                    td: ({ children }) => <td className="border-b border-[var(--border-soft)] px-3 py-2 align-top leading-relaxed last:border-b-0">{children}</td>,
+                    table: ({ children }) => <div className="not-prose my-4 overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-soft)] bg-[var(--canvas)] shadow-xs"><div className="overflow-x-auto"><table className="w-full min-w-[500px] border-collapse border-spacing-0 text-left text-xs sm:text-sm">{children}</table></div></div>,
+                    thead: ({ children }) => <thead className="bg-[var(--cream)] text-[var(--ink)] border-b-2 border-[var(--border-soft)]">{children}</thead>,
+                    th: ({ children }) => <th className="border-r border-[var(--border-soft)] last:border-r-0 border-b-2 border-b-[var(--border-soft)] px-4 py-3 font-bold text-[var(--ink)] bg-[var(--cream)] text-left align-middle">{children}</th>,
+                    tr: ({ children }) => <tr className="border-b border-[var(--border-soft)] last:border-b-0 hover:bg-[var(--surface-elevated)]/50 transition-colors bg-[var(--canvas)]">{children}</tr>,
+                    td: ({ children }) => <td className="border-r border-[var(--border-soft)] last:border-r-0 px-4 py-3 align-top leading-relaxed text-[var(--ink)] bg-[var(--canvas)]">{children}</td>,
                     hr: () => <hr className="my-4 border-[var(--border-soft)]" />,
                     a: ({ children, href }) => <a href={href} className="font-medium text-[var(--accent-legal)] underline decoration-[var(--accent-legal)]/30 underline-offset-2 hover:decoration-current" target="_blank" rel="noreferrer">{children}</a>,
                   }}

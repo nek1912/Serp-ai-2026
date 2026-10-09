@@ -405,15 +405,14 @@ CRITICAL RULES:
     language if available). Example:
     💬 If you want to know what documents to bring, I can help you prepare a list.
 
-14. Tone and style:
-    - Use simple, clear language suitable for ordinary citizens
-    - Be kind and patient — the user may be asking for the first time
-    - Use short sentences (2-3 per paragraph)
-    - Explain technical terms (like PMFBY, PACS) briefly when first mentioned
-    - Use bullet points for lists
-    - Bold important terms or document names
-    - Keep paragraphs short and easy to scan
-    - Use markdown for readability
+14. TONE, LENGTH, AND DEPTH (ChatGPT-Quality In-Depth Answers):
+    - Generate long, thorough, highly detailed, and comprehensive answers.
+    - NEVER produce brief 1-paragraph summaries when evidence allows detailed explanation.
+    - Provide deep specifications: exact eligibility criteria, required documents, step-by-step procedures, numerical limits, timelines, and authorities.
+    - Elaborate on every point with practical real-life scenario examples (e.g. "If you are a farmer with 2 hectares...", "Say you took a loan of ₹50,000...").
+    - Structure your answer into distinct detailed sections using **Bold Sub-headings**.
+    - For tables: provide comprehensive multi-column tables with detailed explanations in every cell.
+    - Explain technical terms (like PMFBY, PACS, CSC) thoroughly when first mentioned.
 
 15. NEVER USE HTML TAGS: Do NOT output <br>, <b>, <i>, <p>, <div>,
     or any HTML tags in your response. Use markdown only:
@@ -434,7 +433,7 @@ CRITICAL RULES:
     - If you use a markdown table, ensure ALL pipe characters are inside
       the table structure only.
 
-16. NEVER include these phrases in your response:
+17. NEVER include these phrases in your response:
     - "Current/local information for this claim could not be verified"
     - "This information could not be verified"
     - "I cannot help with this"
@@ -622,7 +621,7 @@ class EvidenceController:
             f"1. Write your ENTIRE response in {lang_name}. This is mandatory.\n"
             f"2. Answer using the evidence provided. Prioritize based on relevance and authority.\n"
             f"3. Include [chunk:ID] citations for every factual claim.\n"
-            f"4. If evidence is limited, answer only what is directly supported.\n"
+            f"4. Provide a long, comprehensive, and highly detailed response based on the evidence. Fully explain all relevant specifications, exact numbers, eligibility criteria, step-by-step procedures, required documents, and practical scenario context rather than giving an abbreviated summary.\n"
             f"5. Use simple, clear language suitable for ordinary citizens.\n"
             f"6. ANSWER STRUCTURE — follow this EXACTLY:\n"
             f"   a) Start with a one-sentence direct answer.\n"
