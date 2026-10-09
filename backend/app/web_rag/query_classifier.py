@@ -59,11 +59,16 @@ class QueryClassification:
     case_year: Optional[int] = None
     # season: "kharif" | "rabi" | "zaid" if explicitly mentioned, else None.
     season: Optional[str] = None
-    # jurisdiction_source: "explicit" | "session" | "subject_default" | "none".
+    # jurisdiction_source: "explicit" | "session" | "none".
+    # ("recovery" is set by the web recovery path, never here.)
     jurisdiction_source: str = "none"
     # assumed_state: True when state did NOT come from an explicit query
     # signal (session/default fallback). Downstream answers must disclose it.
     assumed_state: bool = False
+    # national_scope: True when the query explicitly claims national
+    # scope ("national", "all india", ...). Beats inherited session
+    # state in resolve_expected_state; English cues only (limitation).
+    national_scope: bool = False
 
 
 DOMAIN_KEYWORDS = {
@@ -674,24 +679,14 @@ STATE_SOCIETY_CUES = [
     "સહકારી મંડળી અધિનિયમ",
 ]
 
-# P0-1: subjects for which the answer is state-competent, so a missing
-# state signal safely defaults to the session/selected state with
-# disclosure instead of silently returning a national answer.
-STATE_COMPETENT_DOMAINS = {
-    "cooperative",
-    "pacs",
-    "pacs_computerization",
-    "agriculture",
-    "pmfby",
-    "schemes",
-    "grievance",
-    "finlit",
-    "financial_inclusion",
-}
-
-# Mirrors Settings.selected_state ("gujarat"). Used only when no explicit
-# query signal and no session state exist for a state-competent subject.
-SUBJECT_DEFAULT_STATE = "Gujarat"
+# P1: the former subject-level Gujarat default (STATE_COMPETENT_DOMAINS
+# + SUBJECT_DEFAULT_STATE, mirroring the dead Settings.selected_state)
+# was removed. An unspecified state must not acquire Gujarat merely
+# because the domain is Gujarat-competent: no-signal queries resolve to
+# central jurisdiction (jurisdiction_source "none"), and callers that
+# need jurisdiction prefer the existing INSUFFICIENT_DATA/abstention
+# semantics over an invented state. Session inheritance (default_state)
+# and explicit signals below are unchanged.
 
 # P0-1/P0-2: explicit season vocabulary (English + Hindi; Gujarati season
 # words are intentionally NOT included — no verified lexicon entry).
@@ -723,6 +718,135 @@ MSCS_ANCHOR_DOMAINS = [
 ]
 
 
+def _match_keyword(keyword: str, text: str) -> bool:
+    """Match one keyword against lowered query text.
+
+    Multi-word phrases use substring matching (inflected forms still
+    match); single words require word boundaries. Naive single-word
+    substring matching creates known collisions ("goa" in "goat",
+    "apy" in "therapy", short acronyms inside ordinary words), so it
+    must not be used for semantic keywords.
+
+    Indic exception: case suffixes agglutinate directly onto the word
+    (Gujarati "ગુજરાતમાં" = Gujarat + locative "in"), and Python \\b
+    does not see a boundary before combining vowel signs even for
+    standalone words ("યોજના"). Non-ASCII keywords therefore also
+    match as a left-anchored prefix. ASCII keywords stay strict so
+    "goa" never matches "goat" — strictly narrower than substring.
+    """
+    if " " in keyword:
+        return keyword in text
+    if re.search(r"\b" + re.escape(keyword) + r"\b", text) is not None:
+        return True
+    if any(ord(c) > 127 for c in keyword):
+        return re.search(r"\b" + re.escape(keyword), text) is not None
+    return False
+
+
+# P1: high-precision scheme-code identifiers. Generic phrases such as
+# "apply for" / "registration for" (2-word weight) otherwise outweigh a
+# single scheme code, routing e.g. "registration for PMFBY" to schemes
+# instead of pmfby. A standalone code match earns a bonus so the
+# identifier decides; this weights precision, it does not reorder lists.
+_DOMAIN_IDENTIFIERS: dict[str, set[str]] = {
+    "pmfby": {"pmfby"},
+    "schemes": {"pmjjby", "pmsby"},
+}
+_IDENTIFIER_BONUS = 2
+
+
+def _best_key(
+    scores: dict[str, int],
+    matched: dict[str, list[str]],
+    safety_key: str,
+    order: list[str],
+    prefer_longest: bool = True,
+) -> str:
+    """Deterministic winner for a score table with ties.
+
+    1. Highest score wins outright.
+    2. On a tie involving the safety key ("grievance"/"GRIEVANCE"),
+       the safety key wins: a complaint signal must reach the
+       redressal workflow rather than lose to an earlier dict entry.
+    3. Otherwise (domains only) the tied entry with the longest
+       matched keyword wins (most specific signal, e.g. "driving
+       licence" over "apply for"). Intents keep the established
+       dict-order precedence instead, so existing guidance intents
+       (APPLICATION, INFORMATIONAL, ...) are unchanged.
+    4. Final fallback is the existing keyword-dict order (unchanged,
+       deterministic) — never a random or score-agnostic pick.
+    """
+    best_score = max(scores.values())
+    tied = [k for k, v in scores.items() if v == best_score]
+    if len(tied) == 1:
+        return tied[0]
+    if safety_key in tied:
+        return safety_key
+    position = {k: i for i, k in enumerate(order)}
+    if prefer_longest:
+        return max(
+            tied,
+            key=lambda k: (
+                max((len(m) for m in matched.get(k, [])), default=0),
+                -position.get(k, 0),
+            ),
+        )
+    return min(tied, key=lambda k: position.get(k, 0))
+
+
+def effective_domain(
+    anchor_domain: str | None,
+    classification: QueryClassification | None,
+) -> str:
+    """Single effective-domain rule shared by both RAG pipelines.
+
+    The AnchorStore domain (keyword + embedding) wins whenever it is
+    specific; the QueryClassifier domain only fills in when the anchor
+    is empty/general. ``out_of_scope`` is never overridden here (the
+    chat layer abstains on it before retrieval), so both pipelines
+    always plan and filter on the same domain for the same query.
+    """
+    if (
+        (not anchor_domain or anchor_domain == "general")
+        and classification is not None
+        and classification.domain != "general"
+    ):
+        return classification.domain
+    return anchor_domain or "general"
+
+
+def resolve_expected_state(
+    session_state: str | None,
+    classification: QueryClassification | None,
+) -> str | None:
+    """State precedence for evidence filtering.
+
+    An explicit state word in the query beats an inherited session
+    value; an explicit national-scope claim beats it too (mirroring
+    the classifier, where national suppresses session defaults).
+    Otherwise the session value is used, falling back to the
+    classifier's own (non-explicit) state. Absence of jurisdiction
+    yields None (central-only filtering) — an assumed/default state is
+    never invented here.
+    """
+    if classification is not None and getattr(
+        classification, "national_scope", False
+    ):
+        return None
+    if (
+        classification is not None
+        and getattr(classification, "jurisdiction_source", "none")
+        == "explicit"
+        and classification.state
+    ):
+        return classification.state
+    if session_state:
+        return session_state
+    if classification is not None:
+        return classification.state
+    return None
+
+
 class QueryClassifier:
 
     def classify(        self, query: str, default_state: Optional[str] = None
@@ -733,20 +857,27 @@ class QueryClassifier:
         if not text:
             raise ValueError("Query cannot be empty.")
 
-        domain_scores = {}
+        domain_scores: dict[str, int] = {}
+        domain_matched: dict[str, list[str]] = {}
         for domain, keywords in DOMAIN_KEYWORDS.items():
             score = 0
+            matched: list[str] = []
+            identifiers = _DOMAIN_IDENTIFIERS.get(domain, set())
             for keyword in keywords:
-                if keyword in text:
+                if _match_keyword(keyword, text):
                     # Multi-word or specific keywords add proportional weight
                     score += len(keyword.split())
+                    matched.append(keyword)
+                    if keyword in identifiers:
+                        score += _IDENTIFIER_BONUS
             if score:
                 domain_scores[domain] = score
+                domain_matched[domain] = matched
 
         if domain_scores:
-            domain = max(
-                domain_scores,
-                key=domain_scores.get,
+            domain = _best_key(
+                domain_scores, domain_matched, "grievance",
+                list(DOMAIN_KEYWORDS),
             )
             highest_score = domain_scores[domain]
             confidence = min(
@@ -757,26 +888,30 @@ class QueryClassifier:
             domain = "general"
             confidence = 0.25
 
-        intent_scores = {}
+        intent_scores: dict[str, int] = {}
+        intent_matched: dict[str, list[str]] = {}
         for intent, keywords in INTENT_KEYWORDS.items():
             score = 0
+            matched_intent: list[str] = []
             for keyword in keywords:
-                if keyword in text:
+                if _match_keyword(keyword, text):
                     score += 1
+                    matched_intent.append(keyword)
             if score:
                 intent_scores[intent] = score
+                intent_matched[intent] = matched_intent
 
         if intent_scores:
-            intent = max(
-                intent_scores,
-                key=intent_scores.get,
+            intent = _best_key(
+                intent_scores, intent_matched, "GRIEVANCE",
+                list(INTENT_KEYWORDS), prefer_longest=False,
             )
         else:
             intent = "INFORMATIONAL"
 
         state = None
         for keyword, state_name in STATE_KEYWORDS.items():
-            if keyword in text:
+            if _match_keyword(keyword, text):
                 state = state_name
                 break
 
@@ -806,9 +941,8 @@ class QueryClassifier:
             jurisdiction_source = "session"
             assumed_state = True
 
-        # Society type is resolved before the subject default so MSCS
-        # questions never receive a state default: multi-state societies
-        # are under central (CRCS/CEA) jurisdiction by definition.
+        # Society type: multi-state societies are under central
+        # (CRCS/CEA) jurisdiction by definition and never take a state.
         society_type = _detect_society_type(text)
 
         # P2-2: explicit district implies its state (stronger than
@@ -838,19 +972,6 @@ class QueryClassifier:
                 jurisdiction_source = "explicit"
                 assumed_state = False
 
-        if (
-            not state
-            and domain in STATE_COMPETENT_DOMAINS
-            and society_type != "mscs"
-            and not national_scope
-        ):
-            # P0-1 safe subject-level default: for state-competent subjects
-            # a missing state must not silently produce a national answer.
-            # The assumption is flagged so answers can disclose it.
-            state = SUBJECT_DEFAULT_STATE
-            jurisdiction_source = "subject_default"
-            assumed_state = True
-
         if state:
             jurisdiction = "state"
         else:
@@ -871,6 +992,7 @@ class QueryClassifier:
             season=season,
             jurisdiction_source=jurisdiction_source,
             assumed_state=assumed_state,
+            national_scope=national_scope,
         )
 
 
@@ -886,7 +1008,7 @@ def _detect_district(text: str, state: Optional[str]) -> Optional[str]:
         return None
     for canonical, variants in GUJARAT_DISTRICTS.items():
         for variant in variants:
-            if variant in text:
+            if _match_keyword(variant, text):
                 return canonical
     return None
 
@@ -898,10 +1020,10 @@ def _detect_society_type(text: str) -> Optional[str]:
     (None) means the query gives no society-type signal.
     """
     for cue in MSCS_CUES:
-        if cue in text:
+        if _match_keyword(cue, text):
             return "mscs"
     for cue in STATE_SOCIETY_CUES:
-        if cue in text:
+        if _match_keyword(cue, text):
             return "state_society"
     return None
 
@@ -928,7 +1050,7 @@ def _detect_explicit_states(text: str) -> set[str]:
     """Collect distinct explicit states named in the query text."""
     found: set[str] = set()
     for keyword, state_name in STATE_KEYWORDS.items():
-        if keyword in text:
+        if _match_keyword(keyword, text):
             found.add(state_name)
     return found
 
@@ -950,7 +1072,7 @@ def _detect_case_time(text: str) -> tuple[Optional[int], Optional[str]]:
     season: Optional[str] = None
     for canonical, variants in SEASON_KEYWORDS.items():
         lowered = [v.lower() for v in variants]
-        if any(v in text for v in lowered):
+        if any(_match_keyword(v, text) for v in lowered):
             season = canonical
             break
 

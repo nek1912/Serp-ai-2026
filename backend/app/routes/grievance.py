@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.auth import require_auth
 from app.config import get_settings
-from app.conversation_store import ensure_conversation
+from app.conversation_store import ensure_conversation, get_conversation
 from app.grievance.field_detector import GrievanceFieldDetector
 from app.grievance.input_types import get_input_type
 from app.grievance.language_check import detect_mixed_language
@@ -75,16 +75,46 @@ def _translate_list(items: list[str] | None, target_lang: str) -> list[str] | No
 class GrievanceRequest(BaseModel):
     message: str
     conversation_id: str
-    user_id: str
+    # Legacy clients send a locally generated id here; it is ignored —
+    # grievance-state ownership always binds to the authenticated sub.
+    user_id: str | None = None
+
+
+def _existing_conversation(conversation_id: str) -> dict | None:
+    """Best-effort lookup; None when missing or the DB is unreachable.
+
+    A DB outage must not change offline/test behavior (the stores already
+    fail open on DB errors); ownership is enforced whenever the DB answers.
+    """
+    try:
+        return get_conversation(conversation_id)
+    except Exception:
+        return None
+
+
+def _require_grievance_owner(state, user_id: str, detail: str) -> None:
+    """404 when the grievance state is owned by someone else.
+
+    Ownership model: GrievanceState.user_id must equal the authenticated
+    Clerk sub. The 404 detail matches the endpoint's own missing-state
+    message so another user's resource existence is never revealed.
+    """
+    if getattr(state, "user_id", None) != user_id:
+        raise HTTPException(status_code=404, detail=detail)
 
 
 @router.post("")
-def handle_grievance(req: GrievanceRequest) -> dict:
-    ensure_conversation(req.conversation_id, req.user_id)
+def handle_grievance(req: GrievanceRequest, authed_user_id: str = Depends(require_auth)) -> dict:
+    # Ownership, not just authentication: the conversation being continued
+    # must belong to the caller (or be new). req.user_id is never trusted.
+    existing = _existing_conversation(req.conversation_id)
+    if existing is not None and existing.get("user_id") != authed_user_id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    ensure_conversation(req.conversation_id, authed_user_id)
     result = _workflow.process_message(
         user_message=req.message,
         conversation_id=req.conversation_id,
-        user_id=req.user_id,
+        user_id=authed_user_id,
     )
     return {
         "status": "ok",
@@ -121,6 +151,9 @@ def get_grievance_fields(conversation_id: str, language: str = "en", user_id: st
     state = load_grievance_state(conversation_id)
     if not state or not state.draft:
         raise HTTPException(status_code=404, detail="No grievance draft for this conversation yet")
+    _require_grievance_owner(
+        state, user_id, "No grievance draft for this conversation yet"
+    )
 
     draft = state.draft
     prompts = _field_detector.get_field_prompts(draft.sub_category)
@@ -167,6 +200,9 @@ def submit_grievance_field_answer(req: GrievanceAnswerRequest, user_id: str = De
     state = load_grievance_state(req.conversation_id)
     if not state or not state.draft:
         raise HTTPException(status_code=404, detail="No grievance draft for this conversation yet")
+    _require_grievance_owner(
+        state, user_id, "No grievance draft for this conversation yet"
+    )
 
     # Reject mutations after finalization
     if state.is_complete:
@@ -204,6 +240,9 @@ def finalize_grievance_draft(req: GrievanceFinalizeRequest, user_id: str = Depen
     state = load_grievance_state(req.conversation_id)
     if not state or not state.draft:
         raise HTTPException(status_code=404, detail="No grievance draft for this conversation yet")
+    _require_grievance_owner(
+        state, user_id, "No grievance draft for this conversation yet"
+    )
 
     # Reject if already finalized
     if state.is_complete:
@@ -374,6 +413,9 @@ def clarify_grievance(req: GrievanceClarifyRequest, user_id: str = Depends(requi
     state = load_grievance_state(req.conversation_id)
     if not state:
         raise HTTPException(status_code=404, detail="No grievance state for this conversation")
+    _require_grievance_owner(
+        state, user_id, "No grievance state for this conversation"
+    )
 
     from app.grievance.classifier import GrievanceClassifier
     from app.grievance.draft_builder import GrievanceDraftBuilder

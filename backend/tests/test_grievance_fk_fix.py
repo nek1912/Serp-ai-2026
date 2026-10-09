@@ -66,7 +66,9 @@ def test_chat_grievance_calls_ensure_conversation(respx_mock):
             assert r.status_code == 200, f"Status {r.status_code}: {r.text}"
             body = r.json()
             assert body["domain"] == "grievance", f"Got domain={body['domain']}"
-            mock_ensure.assert_called_once_with(test_id, test_id)
+            # Chat session ownership: bound to the authenticated Clerk sub
+            # ("test-user" via shared auth stub), never session_id-as-user.
+            mock_ensure.assert_called_once_with(test_id, "test-user")
     finally:
         chat_route.get_anchor_store = original
 
@@ -91,7 +93,7 @@ def test_chat_stream_grievance_calls_ensure_conversation(respx_mock):
             })
             assert r.status_code == 200
             assert "text/event-stream" in r.headers.get("content-type", "")
-            mock_ensure.assert_called_once_with(test_id, test_id)
+            mock_ensure.assert_called_once_with(test_id, "test-user")
     finally:
         chat_route.get_anchor_store = original
 
@@ -116,7 +118,12 @@ def test_grievances_calls_ensure_conversation():
         assert r.status_code == 200, f"Status {r.status_code}: {r.text}"
         body = r.json()
         assert body["status"] == "ok"
-        mock_ensure.assert_called_once_with(test_id, test_user)
+        # P0 ownership: the client-supplied user_id is never trusted — the
+        # conversation is bound to the authenticated identity ("test-user"
+        # via the shared auth stub), not the spoofable request field.
+        mock_ensure.assert_called_once_with(test_id, "test-user")
+        _, kwargs = mock_workflow.process_message.call_args
+        assert kwargs.get("user_id") == "test-user"
         mock_workflow.process_message.assert_called_once()
 
 

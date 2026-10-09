@@ -97,11 +97,17 @@ class TestJurisdictionResolution:
         assert cls.society_type == "mscs"
 
     def test_gujarat_state_cooperative_query(self):
+        # P1: a generic society-type cue with no state signal invents no
+        # state — callers prefer abstention semantics over a guessed
+        # Gujarat. The society-type signal itself is preserved.
         cls = _classifier.classify(
             "How do I file a dispute with the Board of Nominees?"
         )
         assert cls.society_type == "state_society"
-        assert cls.state == "Gujarat"
+        assert cls.state is None
+        assert cls.jurisdiction == "central"
+        assert cls.jurisdiction_source == "none"
+        assert cls.assumed_state is False
 
     def test_no_jurisdiction_general_query(self):
         cls = _classifier.classify("My electricity bill is wrong.")
@@ -111,13 +117,15 @@ class TestJurisdictionResolution:
         assert cls.assumed_state is False
 
     def test_no_signal_state_competent_subject_default(self):
-        # P0-1 safe default: state-competent subject with no signal and no
-        # session state assumes Gujarat WITH disclosure flags.
+        # P1: removed — an unspecified state no longer acquires Gujarat
+        # merely because the domain is Gujarat-competent. No-signal
+        # queries resolve to central jurisdiction with no invented
+        # state (see test_jurisdiction_consistency_p1.py).
         cls = _classifier.classify("What is PMFBY?")
-        assert cls.state == "Gujarat"
-        assert cls.jurisdiction == "state"
-        assert cls.jurisdiction_source == "subject_default"
-        assert cls.assumed_state is True
+        assert cls.state is None
+        assert cls.jurisdiction == "central"
+        assert cls.jurisdiction_source == "none"
+        assert cls.assumed_state is False
 
     def test_inherited_session_state(self):
         cls = _classifier.classify(

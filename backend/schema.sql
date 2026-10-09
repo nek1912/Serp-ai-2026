@@ -116,12 +116,16 @@ as $$
 $$;
 
 -- 6. Sessions table (for session_store.py)
+-- user_id is the Clerk sub owner (nullable for legacy rows, which are
+-- quarantined — never guessed). Messages inherit ownership via session.
 create table if not exists sessions (
   session_id text primary key,
+  user_id    text,
   state      jsonb default '{}',
   expires_at timestamptz,
   created_at timestamptz default now()
 );
+create index if not exists idx_sessions_user_id on sessions(user_id);
 
 -- 7. Purge expired sessions RPC
 create or replace function purge_expired_sessions()

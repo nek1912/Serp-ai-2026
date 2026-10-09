@@ -58,6 +58,17 @@ class SarvamTranslatorError(RuntimeError):
 
 
 _translate_cache: dict[tuple[str, str, str, str], str] = {}
+# Bound the process-wide cache: translation keys hold full answer text and
+# would otherwise grow with every unique query (memory leak under traffic).
+_TRANSLATE_CACHE_MAX = 2000
+
+
+def _cache_store(key: tuple[str, str, str, str], value: str) -> None:
+    """Insert into the translation cache, evicting oldest entries first."""
+    if key not in _translate_cache and len(_translate_cache) >= _TRANSLATE_CACHE_MAX:
+        for _oldest in list(_translate_cache)[: len(_translate_cache) - _TRANSLATE_CACHE_MAX + 1]:
+            del _translate_cache[_oldest]
+    _translate_cache[key] = value
 
 
 def _raw_translate(
@@ -215,7 +226,7 @@ class SarvamTranslator:
             if result == text and source != target:
                 logger.warning("Sarvam returned unchanged text - possible translation failure")
 
-            _translate_cache[cache_key] = result
+            _cache_store(cache_key, result)
             logger.info("Sarvam translation successful: len %d -> %d", len(text), len(result))
             return result
         except Exception as e:

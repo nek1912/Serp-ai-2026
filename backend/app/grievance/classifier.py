@@ -99,8 +99,13 @@ CATEGORY_KEYWORDS = {
         "by-laws", "registrar",
     ],
     GrievanceCategory.AGRICULTURE: [
+        # NOTE: bare "insurance"/"claim" are intentionally absent — they
+        # misrouted general insurance complaints (e.g. insurance-ombudsman
+        # queries) to AGRICULTURE/PMFBY_CLAIM_DELAY. Crop-insurance intent
+        # is still caught via "crop", "pmfby", "fasal bima", "crop insurance"
+        # (subcategory), "kisan", and "krishi".
         "agriculture", "farmer", "crop", "pmfby", "fasal bima",
-        "insurance", "claim", "subsidy", "seed", "fertilizer",
+        "subsidy", "seed", "fertilizer",
         "kisan", "krishi",
     ],
     GrievanceCategory.BANKING: [

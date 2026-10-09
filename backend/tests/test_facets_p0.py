@@ -113,8 +113,10 @@ class TestBranchGeneration:
 
     def test_typical_branch_counts(self):
         branches, _ = _branches("What is PMFBY?")
-        # primary + jurisdiction + gujarati + hindi (assumed state).
-        assert len(branches) == 4
+        # P1: no-signal query is central — primary + hindi only, no
+        # jurisdiction/gujarati branches without a state signal.
+        assert len(branches) == 2
+        assert [b["name"] for b in branches] == ["primary", "hindi"]
         branches, _ = _branches("My electricity bill is wrong.")
         assert len(branches) == 1
 

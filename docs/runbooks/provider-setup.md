@@ -1,6 +1,9 @@
 # Provider Setup Runbook
 
-Follow this exact order to create all provider accounts and populate `.env`.
+Follow this order to create all provider accounts and populate `backend/.env`
+(the backend's only config source; see `.env.example` for the full variable
+list and `backend/app/config.py` for code defaults). All keys are server-side
+only — never expose them via non-`VITE_` variables or commit them.
 
 ## 1. Supabase (Postgres + pgvector)
 
@@ -8,68 +11,160 @@ Follow this exact order to create all provider accounts and populate `.env`.
 2. Click **New Project**
 3. Project name: `sahayak-dev`
 4. Region: nearest to your team
-5. Copy **Project URL** and **service_role key** into `.env`:
+5. Apply `backend/schema.sql` in the SQL editor (creates `documents`,
+   `chunks` with `vector(768)` HNSW index, `sessions`, `grievance_states`,
+   plus the `match_chunks` RPC)
+6. Copy **Project URL** and **service_role key** into `backend/.env`:
    ```
    SUPABASE_URL=https://<ref>.supabase.co
    SUPABASE_SERVICE_KEY=<service_role key>
    ```
 
-## 2. Groq (LLM inference)
+## 2. Jina (primary embeddings, 768d)
 
-1. Go to https://console.groq.com
-2. Navigate to **API Keys**
-3. Create a new key
-4. Add to `.env`:
+1. Go to https://jina.ai and create an API key
+2. Add to `backend/.env` (second key is an optional rotation spare):
+   ```
+   JINA_API_KEY=...
+   JINA_API_KEY_2=...
+   ```
+3. Model is `jina-embeddings-v3` (task-typed `retrieval.query` /
+   `retrieval.passage`), configured in `config.py`.
+
+## 3. Groq (primary LLM)
+
+1. Go to https://console.groq.com → **API Keys** → create a key
+2. Add to `backend/.env` (numbered keys are rotation spares):
    ```
    GROQ_API_KEY=gsk_...
+   GROQ_API_KEY_1=...
+   GROQ_API_KEY_2=...
+   GROQ_MODEL=openai/gpt-oss-120b
+   GROQ_FALLBACK_MODEL=qwen/qwen3.8-27b
    ```
+3. Do NOT use `llama-3.3-70b-versatile` — it is dead on Groq (HTTP 404).
+   (`.env.example` still names it; `config.py` defaults are empty on purpose.)
 
-## 3. Gemini (Embeddings)
+## 4. Gemini (fallback LLM + WebRAG reranker + grievance model)
 
-1. Go to https://aistudio.google.com
-2. Click **Get API key**
-3. Add to `.env`:
+1. Go to https://aistudio.google.com → **Get API key**
+2. Add to `backend/.env`:
    ```
    GEMINI_API_KEY=...
+   GEMINI_MODEL=gemini-2.5-flash
+   GRIEVANCE_GEMINI_MODEL=gemini-3.5-flash-lite
    ```
+3. Gemini embedding is the embeddings fallback when Jina fails.
 
-## 4. Sarvam AI (Voice — STT, TTS, Translation)
+## 5. Sarvam AI (primary STT, TTS, translation)
 
-1. Go to https://sarvam.ai
-2. Register and obtain API key
-3. Add to `.env`:
+1. Go to https://sarvam.ai, register and obtain an API key
+2. Add to `backend/.env` (second key is a rotation spare):
    ```
    SARVAM_API_KEY=...
+   SARVAM_API_KEY_2=...
+   ```
+3. Roles: primary STT → Azure fallback; TTS primary (Azure TTS is
+   deliberately excluded — poor Indic output); translation primary
+   (Mayura v1) → Azure Translator fallback.
+
+## 6. Tavily (primary web search)
+
+1. Go to https://tavily.com, create an API key
+2. Add to `backend/.env` (second key races the first concurrently):
+   ```
+   TAVILY_API_KEY_1=...
+   TAVILY_API_KEY_2=...
    ```
 
-## 5. Render (Backend hosting)
+## 7. SerpApi Google (live web-search provider)
 
-1. Go to https://dashboard.render.com
-2. Sign up (used by Task 4)
+1. Go to https://serpapi.com, create an API key
+2. Add to `backend/.env` (second key is a sequential fallback):
+   ```
+   SERPAPI_API_KEY_1=...
+   SERPAPI_API_KEY_2=...
+   SEARCH_PROVIDERS=tavily,serpapi
+   ```
+3. Only `engine=google` is used. The SerpApi **Search Index** engine was
+   evaluated 2026-10-05 and rejected (see DECISIONS.md) — do not enable it.
+
+## 8. Firecrawl (web crawl / scrape fallback)
+
+1. Go to https://firecrawl.dev, create an API key
+2. Add to `backend/.env`:
+   ```
+   FIRECRAWL_API_KEY=...
+   ```
+
+## 9. Azure (fallback STT + fallback translation)
+
+1. Create a Speech resource and a Translator resource in the Azure portal
+2. Add to `backend/.env`:
+   ```
+   AZURE_SPEECH_KEY=...
+   AZURE_SPEECH_REGION=...
+   AZURE_TRANSLATOR_KEY=...
+   AZURE_TRANSLATOR_REGION=...
+   AZURE_TRANSLATOR_ENDPOINT=...
+   ```
+3. Azure is fallback-only: STT fallback, translation fallback. Azure TTS
+   is not used.
+
+## 10. Clerk (mandatory auth for chat/voice/grievance-write)
+
+1. Go to https://clerk.com, create an application
+2. Add to `backend/.env`:
+   ```
+   CLERK_SECRET_KEY=...
+   CLERK_ISSUER=https://<instance>.clerk.accounts.dev
+   CLERK_WEBHOOK_SECRET=...   # only if syncing users via /webhooks/clerk
+   ```
+3. Add to `frontend/.env`:
+   ```
+   VITE_CLERK_PUBLISHABLE_KEY=...
+   ```
+   (`CLERK_ISSUER` above must be the same Clerk application.)
+4. Without a valid JWT, `/chat`, `/chat/stream` (and grievance-write/voice)
+   return `401 {"detail":"Not authenticated"}`. Pre-existing route tests
+   that post without a token fail with 401 for this reason.
+
+## 11. Hosting (Render backend, static frontend)
+
+- **Backend (Render):** connect the repo; start command
+  `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (see `render.yaml`).
+  Free tier sleeps on inactivity (cold starts expected).
+- **Frontend:** pure static bundle (`npm run build` → `dist/`), any static
+  host/CDN. The browser calls FastAPI directly (`VITE_BACKEND_API_URL` is
+  the backend BASE, e.g. `http://localhost:8000`); no proxy server.
+
+## Key budgets / timeouts (see `backend/app/config.py`)
+
+| Setting | Code default |
+|---|---|
+| `WEB_RAG_TIMEOUT_S` (outer WebRAG budget, cooperative deadline) | `30.0` |
+| WebDiscovery provider timeout | `5s`, `MAX_BRANCHES=8` (frozen) |
+| Gemini reranker timeout | `10.0` (clamped ≥10s — google-genai API minimum) |
+| `RERANKER_ENABLED` | `false` (keep off — Recall@1 drops 0.85→0.50 when on) |
+| Evidence gate | `TOP1_THRESHOLD=0.25`, `SECONDARY_THRESHOLD=0.30`, `MIN_CHUNKS_ABOVE_SECONDARY=2` |
 
 ## Smoke Tests
 
-After accounts exist, run from repo root with `.env` loaded:
+There are no standalone `scripts/smoke_*.py` files. After accounts exist and
+`backend/.env` is populated, verify from `backend/`:
 
 ```bash
-python scripts/smoke_groq.py
-python scripts/smoke_gemini_embeddings.py
+python -m pytest tests/test_health.py tests/test_llm_fallback.py tests/test_embedding_retry.py -q
 ```
 
-Expected output:
-- `groq ok: OK`
-- `gemini-embedding-2 ok: 3 inputs -> 3 distinct 768-dim vectors`
-
-If the aggregation assertion in the Gemini script fails: **STOP**. Revert embedding model to `gemini-embedding-001` per DECISIONS.md guard, re-log, adjust `config.py` (Task 3) to add manual L2 normalization.
-
-For Supabase smoke (run after Task 3's migration):
-```bash
-python scripts/smoke_supabase.py
-```
+Expected: all pass — provider fallback chains (Groq→Gemini, Jina→Gemini
+embeddings) work without live credentials. For a live check, hit
+`GET /health/providers` with the backend running.
 
 ## Model ID Verification
 
 - **Groq**: `openai/gpt-oss-120b` (primary), `qwen/qwen3.8-27b` (fallback) — verify at https://console.groq.com/docs/models
 - **Gemini LLM**: `gemini-2.5-flash` — verify at https://ai.google.dev/gemini-api/docs
 
-If model IDs have changed, use the documented successor and update `config.py`.
+If model IDs have changed, use the documented successor and update `backend/.env`
+(`config.py` reads model names from the environment; its defaults are empty).

@@ -38,19 +38,20 @@ tells you what's actually built and what the current state is. This file
 | LLM fallback | Gemini | `gemini_model` in config |
 | Voice STT | Sarvam AI (primary) → Azure Speech (fallback) | |
 | Voice TTS | Sarvam AI only | Azure excluded (bad Indic output) |
-| Translation | Sarvam Mayura v2 (primary) → Azure Translator (fallback) | |
+| Translation | Sarvam Mayura v1 (primary) → Azure Translator (fallback) | |
 | Web search | Tavily (primary) / SerpApi Google / Firecrawl | for WebRAGService |
 | Document parsing | MinerU `content_list_v2.json` | seed_parser.py |
-| Reranker | Jina reranker (wired, disabled) | `RERANKER_ENABLED=false` |
+| Reranker | Jina reranker (wired, disabled) | `RERANKER_ENABLED=false`; Gemini reranker deadline clamped ≥10s (API minimum) |
 
 ---
 
 ## API contracts (current — match `backend/app/routes/`)
 
 ```
-/chat + /chat/stream require a Clerk JWT (401 without it); the Next.js
-proxy attaches `Authorization: Bearer <token>`. `BACKEND_API_URL` is the
-backend BASE (no `/chat` suffix).
+/chat + /chat/stream require a Clerk JWT (401 without it); the browser
+attaches Clerk's session token as `Authorization: Bearer <token>` directly —
+there is no proxy server. `VITE_BACKEND_API_URL` is the backend BASE
+(no `/chat` suffix); `src/lib/backend.ts` owns the legacy `/api/*` mapping.
 
 POST /chat
 POST /chat/stream                 ← SSE streaming version
@@ -74,16 +75,17 @@ second port. `src/lib/backend.ts` owns the base URL, the legacy `/api/*` →
 FastAPI path mapping, and the bearer header; `App.tsx` registers Clerk's
 `useAuth().getToken` there once at mount.
 
-Because requests are cross-origin, `ALLOWED_ORIGINS` in the repo-root `.env`
-must list the frontend's origin. `CLERK_ISSUER` there must match the frontend's
-Clerk instance — if they diverge, every authenticated call 401s.
+Because requests are cross-origin, `ALLOWED_ORIGINS` in `backend/.env`
+(the backend's single source of truth) must list the frontend's origin.
+`CLERK_ISSUER` there must match the frontend's Clerk instance — if they
+diverge, every authenticated call 401s.
 
-Chat request: `{ question, session_id, language, ui_language_explicit?, state?, as_of_date?, history? }`  
+Chat request: `{ question, session_id, language, ui_language_explicit?, state?, as_of_date?, history?, mode? }`  
 Language values: `"en" | "hi" | "gu" | "mr" | "bn" | "ta" | "te" | "kn" | "pa" | "or" | "ml"`
 
 Chat response: `{ answer, language, domain, intent, entities, confidence, confidence_level, citations, abstained, speech_text, speech_segments, follow_up_question, mode, conversation_id }`
 
-SSE events: `thinking | step | token | metadata | done | error`
+SSE events: `thinking | token | metadata | done`
 
 ---
 
@@ -94,7 +96,7 @@ SSE events: `thinking | step | token | metadata | done | error`
 - Every external provider call goes through an adapter with explicit timeout and
   fallback handling — never call a provider SDK directly from route handlers.
 - Never put API keys in frontend code or commit them. Only `VITE_`-prefixed vars reach the browser bundle; `CLERK_SECRET_KEY` is read only by the backend.
-  Backend environment variables only. `CLERK_SECRET_KEY` and `CLERK_ISSUER` stay in the repo-root `.env`; a stale `backend/.env` is ignored with a warning.
+  Backend environment variables only. `CLERK_SECRET_KEY` and `CLERK_ISSUER` stay in `backend/.env` (the only backend source of truth); a repo-root `.env`, if present, is ignored with a warning.
 - Structured logs. Never log API keys, auth tokens, or full grievance PII.
 - Write tests for: domain routing, jurisdiction filtering, retrieval, citation
   validity, abstention, grievance workflow, provider fallback.

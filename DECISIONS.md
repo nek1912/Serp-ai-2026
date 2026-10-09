@@ -173,12 +173,41 @@ Each entry: what changed, why, what it replaced, when.
 
 ### Clerk authentication mandatory on chat/voice/grievance-write endpoints
 **Date:** 2026-10-06 (code state; enforced in `app/auth.py` + route `Depends(require_auth)`)
-**What:** `POST /chat`, `POST /chat/stream` (and grievance-write + voice routes) return `401 {"detail":"Not authenticated"}` without a valid Clerk JWT. The Next.js proxy routes attach `Authorization: Bearer <token>` from `auth().getToken()`. Pre-existing route tests that post without a token fail with 401 — unrelated to retrieval.
+**What:** `POST /chat`, `POST /chat/stream` (and grievance-write + voice routes) return `401 {"detail":"Not authenticated"}` without a valid Clerk JWT. The browser attaches Clerk's session token directly (`src/lib/backend.ts`); there is no proxy server since the 2026-10-05 React+Vite migration. Pre-existing route tests that post without a token fail with 401 — unrelated to retrieval.
 **Why:** Demo requires signed-in users; backend never serves RAG without an authenticated `user_id`.
 
 ---
 
-### `BACKEND_API_URL` is the backend base URL (frontend proxy convention)
+### `VITE_BACKEND_API_URL` is the backend base URL (direct-access convention)
+**Date:** 2026-10-06 (updated post React+Vite migration)
+**What:** `VITE_BACKEND_API_URL=http://localhost:8000` (no `/chat` suffix). The browser calls FastAPI directly; `src/lib/backend.ts` maps legacy `/api/*` paths (`/api/chat`→`/chat`, `/api/chat/stream`→`/chat/stream`, etc.) and attaches the bearer token. No proxy server, no second port. (Supersedes the Next.js `/api` proxy convention.)
+**Why:** The 2026-10-05 migration removed the Next.js BFF; the browser holds only Clerk's session token and `CLERK_SECRET_KEY` never leaves the backend.
+
+---
+
+### `backend/.env` is the only backend config source
 **Date:** 2026-10-06
-**What:** `BACKEND_API_URL=http://localhost:8000` (no `/chat` suffix). `/api/chat` proxies to `{base}/chat`, `/api/chat/stream` to `{base}/chat/stream`; both strip a legacy `/chat` or `/chat/stream` suffix so old env values still resolve. 503 from these routes means the backend is unreachable (the response detail now names the target URL); 502 means the backend answered non-OK. Restart `npm run dev` after changing `.env.local`.
-**Why:** A stale `.env.local` pointing at dead port 8001 caused `POST /api/chat/stream` 503 while both servers were "live". The old convention was also inconsistent (chat routes expected a `/chat` suffix, grievance/voice routes expected the base).
+**What:** `app/config.py::_env_file()` returns the absolute path of `backend/.env`. A repo-root `.env`, if present, is ignored with a `RuntimeWarning`. Neither file is git-tracked (only `.env.example` files are).
+**Why:** CWD-relative `env_file=".env"` silently picked up different files depending on launch directory; then the repo-root preference silently shadowed the fully-populated `backend/.env`, leaving Tavily/SerpApi/Sarvam keys unevaluated. Absolute-path single source + loud warning on the ignored file.
+**What it replaced:** Repo-root preference with stale-`backend/.env` warning (2026-10-05 migration era).
+
+---
+
+### Gemini reranker deadline floor 10s
+**Date:** 2026-10-06
+**What:** `gemini_reranker_timeout_s` default `8.0` → `10.0`, plus `max(GEMINI_MIN_DEADLINE_S=10.0, configured)` clamp in `GeminiReranker.__init__`. Jina fallback, timeout protection, and rerank logic unchanged.
+**Why:** google-genai rejects manually-set deadlines below 10s with `400 INVALID_ARGUMENT`, so every rerank attempt failed before falling back. Live-verified: Gemini pre-rank succeeds in ~2s after the fix.
+
+---
+
+### Full web citation IDs (no 8-char truncation for `web_*`)
+**Date:** 2026-10-06
+**What:** `short_citation_id()` keeps `web_{hex}_c{N}` IDs whole in prompts, auto-appended markers, and response citations; the verifier matches full web IDs (static UUIDs keep the 8-char prefix; the >1-match ambiguity rule is unchanged). Truncated web prefixes stay invalid and are repaired to full IDs.
+**Why:** Same-URL web chunks share the 12-hex stem, so every truncated marker was ambiguous → legitimate web answers always abstained (live MSCS case). Live-verified post-fix: MSCS answer passes HIGH 1.0 with 23 valid citations.
+
+---
+
+### `rag-fix` merged to `main` + backend freeze
+**Date:** 2026-10-06
+**What:** `rag-fix` (static 6-key RPC + as_of_date threading, grounding enforcement, PACS prompt fix, insurance-keyword fix, citation URL allowlist + marker normalization + full web IDs, Gemini 10s floor) merged into `main` (merge commit `403b9de`). Two same-hunk conflicts (`retrieval/__init__.py`, `services/static_rag.py`) resolved toward `rag-fix` (functional superset of `main`'s independent same fix); `main`'s `_env_file()`/Firecrawl/provider changes kept. Full suite 1434 passed / 83 pre-existing baseline failures; ruff clean; live smoke A–J passed.
+**Why:** Freeze the validated backend before the hackathon demo. Accepted residual risks: external provider variance, no INSURANCE grievance category, Sarvam EN→GU code-mixing.

@@ -11,35 +11,33 @@ def _env_file() -> str:
     pydantic-settings resolves a relative `env_file` against the process CWD, so
     `env_file=".env"` silently picked up a DIFFERENT file depending on whether
     you ran `uvicorn app.main:app` from backend/ or `uvicorn app.main:app
-    --app-dir backend` from the repo root. A stale backend/.env was shadowing
-    the repo-root one, which is how ALLOWED_ORIGINS stayed on the old Next.js
-    port and CLERK_ISSUER stayed on an old Clerk instance — every authenticated
-    request 401'd with no obvious cause.
+    --app-dir backend` from the repo root.
 
-    The repo root is authoritative. A leftover backend/.env is reported loudly
-    rather than read, because silently merging two files with conflicting keys is
-    how this went wrong in the first place.
+    backend/.env is the single source of truth for backend configuration,
+    resolved by absolute path — never relative to CWD. A repo-root .env, if
+    present, is NOT read; it is reported loudly so two files with conflicting
+    keys can never silently disagree.
     """
     here = Path(__file__).resolve()
-    repo_root = here.parent.parent.parent / ".env"   # backend/app/config.py -> repo root
-    backend_local = here.parent.parent / ".env"      # backend/.env
+    backend_local = here.parent.parent / ".env"      # backend/.env (authoritative)
+    repo_root = here.parent.parent.parent / ".env"  # NOT read for backend config
 
-    if backend_local.exists() and backend_local != repo_root:
+    if repo_root.exists() and repo_root != backend_local:
         import warnings
 
         warnings.warn(
-            f"Ignoring stale {backend_local}. Configuration is read from "
-            f"{repo_root}. Delete backend/.env, or copy your changes into the "
-            "repo-root .env, otherwise the two will keep disagreeing.",
+            f"Ignoring {repo_root}. Backend configuration is read only from "
+            f"{backend_local}. Move any backend keys into backend/.env, "
+            "otherwise the two files will disagree.",
             RuntimeWarning,
             stacklevel=2,
         )
 
-    return str(repo_root)
+    return str(backend_local)
 
 
 class Settings(BaseSettings):
-    # Absolute path to the repo-root .env — never relative to CWD.
+    # Absolute path to backend/.env — never relative to CWD.
     model_config = SettingsConfigDict(env_file=_env_file(), extra="ignore")
     groq_api_key: str
     gemini_api_key: str = ""
@@ -47,19 +45,36 @@ class Settings(BaseSettings):
     jina_api_key_2: str = ""
     supabase_url: str
     supabase_service_key: str
+    # NOTE: default ":3000" predates the Vite dev server on :5173 — a fresh
+    # checkout needs ALLOWED_ORIGINS overridden or browser calls CORS-fail.
     allowed_origins: str = "http://localhost:3000"
-    selected_state: str | None = "gujarat"
+    # NOTE (P1): the former `selected_state` field was removed — it had
+    # zero readers (dead duplicate of session state). Jurisdiction comes
+    # from req.state -> session state ("selected_state" key in the
+    # sessions-row JSON, see session_store.py) -> explicit query words.
+    # Do not reintroduce another global default state here.
     # Model IDs loaded directly from environment (.env)
     groq_model: str = ""
     groq_fallback_model: str = ""
     gemini_model: str = ""
     gemini_fallback_model: str = ""
-    embed_model: str = ""
+    embed_model: str = ""  # Gemini embedding model id, e.g. "gemini-embedding-2".
+    # WARNING: EMBED_MODEL (Gemini) vs EMBEDDING_MODEL (Jina) — different
+    # providers, different vars (see note below). The production .env sets
+    # EMBEDDING_MODEL but NOT EMBED_MODEL, so the Gemini embedding fallback
+    # path raises until EMBED_MODEL is set. Jina is primary when configured.
     embedding_model: str = "jina-embeddings-v3"
     jina_embed_model: str = ""
-    reranker_model: str = ""
+    # NOTE: three vars for one concept (legacy). Precedence in
+    # embeddings.py: jina_embed_model > embedding_model > built-in default.
+    # embed_model is the GEMINI embedding model id (different provider).
+    reranker_model: str = ""  # DEAD: no consumer (Jina reranker has no model id).
+    # WARNING — RERANKER_ENABLED gates TWO independent rerankers, not one:
+    #   * static RAG Jina rerank (static_rag.py), AND
+    #   * WebRAG Gemini pre+final ranking (gemini_reranker.py degrades to
+    #     passthrough when False). Do not read it as "Jina reranker only".
     reranker_enabled: bool = False
-    retrieval_strategy: str = "dense"  # dense | hybrid | hybrid_reranked
+    retrieval_strategy: str = "dense"  # DEAD: no consumer (strategy is fixed hybrid+RRF).
 
     @property
     def groq_model_list(self) -> list[str]:
@@ -111,9 +126,16 @@ class Settings(BaseSettings):
     firecrawl_api_url: str = "https://api.firecrawl.dev/v1"
     serpapi_api_key_1: str = ""
     serpapi_api_key_2: str = ""
+    # Single source of truth for provider selection together with the
+    # SEARCH_PROVIDERS env var: web_rag/providers.py resolves as
+    # explicit arg > os.getenv("SEARCH_PROVIDERS") > this setting >
+    # DEFAULT_PROVIDERS, and logs the source plus the effective set.
     search_providers: str = "tavily"
 
     # Grievance & evidence
+    # NOTE: despite the name, this model id is ALSO the Gemini reranker
+    # model (gemini_reranker.py reads grievance_gemini_model, not
+    # gemini_model). Renaming it requires touching the reranker too.
     grievance_gemini_model: str = "gemini-3.5-flash-lite"
 
     # Clerk authentication
@@ -125,7 +147,9 @@ class Settings(BaseSettings):
     answer_grounding_llm_enabled: bool = False  # Enable LLM verification layer
 
     # Web RAG latency budgets
-    gemini_reranker_timeout_s: float = 8.0
+    # NOTE: google-genai rejects manually-set deadlines below 10s with
+    # 400 INVALID_ARGUMENT, so this default must stay >= 10.0.
+    gemini_reranker_timeout_s: float = 10.0
     jina_reranker_timeout_s: float = 5.0
     web_rag_timeout_s: float = 30.0
 

@@ -191,10 +191,13 @@ class TestLanguageBranchesExecute:
         assert "Crop insurance" in primary["query"]
 
     def test_hindi_branch_for_assumed_state(self):
+        # P1: no-signal PMFBY is central (no invented state); the Hindi
+        # branch still fires for central-scheme questions.
         from app.web_rag.query_classifier import QueryClassifier
 
         cls = QueryClassifier().classify("What is PMFBY?")
-        assert cls.assumed_state is True
+        assert cls.state is None
+        assert cls.jurisdiction == "central"
         service = WebDiscoveryService()
         branches = service._build_stage1_branches("What is PMFBY?", cls, "What is PMFBY?")
         assert "hindi" in [b["name"] for b in branches]

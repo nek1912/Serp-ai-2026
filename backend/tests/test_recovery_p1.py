@@ -243,7 +243,9 @@ class TestRetrieveLoop:
             service.reranker, "final_rerank",
             side_effect=lambda query, candidates, top_k, classification: candidates[:top_k],
         ):
-            result = service.retrieve(query="Crop insurance scheme")
+            # P1: explicit Gujarat query (no silent default) with only
+            # Maharashtra evidence -> jurisdiction recovery widens.
+            result = service.retrieve(query="Crop insurance scheme Gujarat")
 
         assert result.abstained is False
         assert result.metadata["recovery_axes"] == ["jurisdiction"]

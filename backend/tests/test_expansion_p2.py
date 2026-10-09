@@ -60,6 +60,23 @@ class TestExpansionTerms:
         assert len(applied) <= 2
         assert all(len(v) <= 6 for v in applied.values())
 
+    def test_registry_query_gets_no_relief_terms(self):
+        # agriculture-domain but not about relief: the crop-relief rule
+        # must stay silent (require_any gate) so branch queries are not
+        # polluted with unrelated synonyms.
+        q = "Farmer Registry Gujarat official website registration process"
+        cls = _classifier.classify(q)
+        terms, applied = expansion_terms(q, cls)
+        assert "crop-relief" not in applied
+        for noisy in ("relief", "relief package", "assistance", "compensation"):
+            assert noisy not in terms
+
+    def test_claim_query_still_expands(self):
+        q = "Farmer crop insurance claim rejected in Gujarat"
+        cls = _classifier.classify(q)
+        _terms, applied = expansion_terms(q, cls)
+        assert "crop-relief" in applied
+
 
 class TestExceptionDemotion:
     def test_gujarat_ladder_demoted(self):

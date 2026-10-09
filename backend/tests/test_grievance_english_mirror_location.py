@@ -94,7 +94,7 @@ class TestEnglishMirrorLocation:
                  ),
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-location", language="gu")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         english = result["grievance"].get("english")
         assert english is not None, "english_mirror must be present"
@@ -133,7 +133,7 @@ class TestEnglishMirrorLocation:
                  ),
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-desc", language="gu")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         english = result["grievance"]["english"]
         expected_desc = "Garbage has not been collected for exactly 9 days near the community hall."
@@ -169,7 +169,7 @@ class TestEnglishMirrorLocation:
                  ),
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-sub", language="gu")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         english = result["grievance"]["english"]
         assert english["submission"] is not None

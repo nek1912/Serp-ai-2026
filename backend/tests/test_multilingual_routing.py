@@ -108,11 +108,14 @@ class TestTierTwoOverride:
     """When both guidance and grievance keywords present, grievance wins."""
 
     def test_hi_grievance_with_application_keyword(self):
-        q = "मैंने पीएमएफबीवाई के लिए आवेदन किया था लेकिन मेरा दावा अभी तक नहीं मिला है। मैं शिकायत करना चाहता हूँ।"
+        # Two distinct REGISTRATION hits beat one GRIEVANCE hit outright,
+        # so the Tier 2 override (not the Tier 1 intent rule) routes this
+        # to grievance. Single-hit ties now resolve to GRIEVANCE directly.
+        q = "मुझे PMFBY में पंजीकरण करना है, please help me enroll, लेकिन मेरी शिकायत है कि portal काम नहीं करता।"
         cls = _classify(q.lower())
-        assert cls.intent == "APPLICATION", "QC should pick APPLICATION (tie-break)"
+        assert cls.intent == "REGISTRATION", "QC should pick REGISTRATION (2 distinct hits beat 1)"
         assert _should_route_to_grievance(cls, q, input_lang="hi"), (
-            "Tier 2 override: grievance keyword in raw query should override APPLICATION"
+            "Tier 2 override: grievance keyword in raw query should override REGISTRATION"
         )
 
     def test_en_grievance_with_application_keyword(self):

@@ -78,8 +78,11 @@ class TestAdversarialMatrix:
         assert result["classification"]["state"] == "Gujarat"
 
     def test_03_pacs_storage_uses_cooperative_anchors(self):
+        # P1: explicit Gujarat signal (no silent default) still yields
+        # the cooperative anchor set for a PACS storage query.
         service = WebDiscoveryService()
-        cls = _classifier.classify("Can our PACS get a godown under the storage plan?")
+        cls = _classifier.classify("Can our PACS in Gujarat get a godown under the storage plan?")
+        assert cls.state == "Gujarat"
         anchors = service._anchor_domains_for(cls)
         assert "cooperation.gov.in" in anchors
 
@@ -131,15 +134,16 @@ class TestAdversarialMatrix:
         ][0]["validity"].get("effective_from") is None
 
     def test_08_rbi_complaint_current_scheme(self):
+        # P1: explicit Gujarat signal (no silent default); RBI in anchors.
         service = WebDiscoveryService()
-        cls = _classifier.classify("Bank wrongly debited charges; RBI complaint")
+        cls = _classifier.classify("Bank wrongly debited charges in Gujarat; RBI complaint")
         anchors = service._anchor_domains_for(cls)
-        # Gujarat assumed via session-less subject default; RBI in anchors.
         assert "rbi.org.in" in (anchors or [])
 
     def test_09_insurance_complaint_irdai(self):
+        # P1: explicit Gujarat signal (no silent default); IRDAI in anchors.
         cls = _classifier.classify(
-            "My crop insurance claim was rejected by the insurance company"
+            "My crop insurance claim was rejected by the insurance company in Gujarat"
         )
         service = WebDiscoveryService()
         anchors = service._anchor_domains_for(cls)
@@ -147,8 +151,10 @@ class TestAdversarialMatrix:
         assert any("irdai" in d for d in anchors)
 
     def test_10_gujarati_gr_query_runs_gujarati_branch(self):
+        # P1: explicit Gujarat signal (no silent default) keeps the
+        # Gujarati branch for a Gujarati GR query.
         result = _discover(
-            "પાક વીમા ઠરાવ",
+            "ગુજરાતમાં પાક વીમા ઠરાવ",
             [_item("https://agri.gujarat.gov.in/gr/pak-vimo", "પાક વીમા સરકારી ઠરાવ", "પાક વીમો સહાય ઠરાવ. " * 10)],
         )
         assert "gujarati" in result["discovery_metadata"]["branches_run"]

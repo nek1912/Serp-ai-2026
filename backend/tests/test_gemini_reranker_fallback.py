@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.retrieval.gemini_reranker import GeminiReranker
+from app.config import Settings
+from app.retrieval import gemini_reranker as gr_module
+from app.retrieval.gemini_reranker import GEMINI_MIN_DEADLINE_S, GeminiReranker
 
 
 CANDIDATES = [
@@ -78,3 +81,43 @@ def test_gemini_timeout_uses_jina() -> None:
     assert result["reranker_used"] == "jina"
     assert result["reranker_fallback_reason"] == "gemini_timeout"
     jina.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Deadline validity (live 400 INVALID_ARGUMENT: "Minimum allowed deadline is 10s")
+# ---------------------------------------------------------------------------
+
+
+def _settings_for(timeout_s: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        reranker_enabled=True,
+        gemini_api_key="test-key",
+        gemini_model="test-model",
+        grievance_gemini_model="test-model",
+        gemini_reranker_timeout_s=timeout_s,
+    )
+
+
+def _init_client_timeout_ms(timeout_s: float) -> int:
+    """Run the real __init__ with mocked settings/client; return HttpOptions timeout (ms)."""
+    with patch.object(gr_module, "get_settings", return_value=_settings_for(timeout_s)), \
+        patch.object(gr_module.genai, "Client") as mock_client:
+        GeminiReranker()
+    http_options = mock_client.call_args.kwargs["http_options"]
+    return int(http_options.timeout)
+
+
+def test_settings_default_deadline_satisfies_api_minimum() -> None:
+    assert GEMINI_MIN_DEADLINE_S == 10.0
+    assert Settings().gemini_reranker_timeout_s >= GEMINI_MIN_DEADLINE_S
+
+
+def test_sub_minimum_config_is_clamped_to_api_minimum() -> None:
+    """An explicit 8s override must not reach Gemini (was live 400 INVALID_ARGUMENT)."""
+    assert _init_client_timeout_ms(8.0) == 10000
+
+
+def test_valid_configured_deadline_is_preserved() -> None:
+    """Timeout protection stays intact for compliant values."""
+    assert _init_client_timeout_ms(15.0) == 15000
+    assert _init_client_timeout_ms(10.0) == 10000

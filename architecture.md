@@ -16,13 +16,17 @@ Evidence-grounded, multilingual citizen-assistance platform for cooperative gove
                         USER
                           |
                           v
-             +---------------------------+
-             |      Next.js 16 PWA       |
-             |  / /chat /voice           |
-             |  /grievance /schemes      |
-             |  /services /library       |
-             |  /faq /legal              |
-             +------------+--------------+
+              +---------------------------+
+              |  React 19 + Vite 8 SPA    |
+              |  (static bundle, no PWA:  |
+              |   no manifest/SW)         |
+              |  / /chat /grievance       |
+              |  /schemes /services       |
+              |  /library /faq /legal     |
+              |  /sign-in /sign-up        |
+              +------------+--------------+
+              (browser → FastAPI direct,
+               Clerk Bearer, no proxy)
                           |
                         HTTPS
                           |
@@ -117,7 +121,7 @@ POST /chat (or /chat/stream for SSE)   [requires Clerk JWT → 401 without it]
   ├── detect_query_languages()    → dominant language + language_mix
   ├── _translate_to_english()     → Sarvam (primary) → Azure (fallback)
   ├── get_embedding_provider().embed_texts()  → 768d Jina v3 embedding
-  ├── AnchorStore.classify()      → domain (keyword rules + cosine similarity, floor 0.30)
+   ├── AnchorStore.classify()      → domain (keyword rules + cosine similarity, floor 0.20)
   ├── QueryClassifier.classify()  → web RAG classification (domain, jurisdiction, state)
   │
   ├─[if domain == "grievance"]────────────────────────────────────────────────┐
@@ -235,7 +239,7 @@ conversation_id (PK), user_id, state_json (full GrievanceState as JSON),
 created_at, updated_at
 ```
 
-`match_chunks` RPC: dense vector search with domain + state filter, returns top-k by cosine similarity.
+`match_chunks` RPC: dense vector search with domain + state + effective-date (`as_of_date`) filter, returns top-k by cosine similarity. The app always sends all six keys (`query_embedding, match_domain, match_state, match_count, as_of_date, match_entity_id`) so PostgREST unambiguously selects the 6-arg overload — a 4-key call fails with PGRST203 where both overloads exist.
 
 ---
 
@@ -316,15 +320,12 @@ Multiple independent layers bound the amount of evidence and tokens processed:
 - Dynamic (web) evidence: top 3 highest-quality chunks only
 - Per-chunk text: truncated at `MAX_CHARS_PER_CHUNK = 3000`
 
-**Context builder** (`rag/context_builder.py`) — caps the overall context window:
-- Default `max_chunks = 8` (total across all sources)
-
 **Web RAG** (`web_rag/service.py`) — caps chunks per web source:
 - `WEB_MAX_CHUNKS_PER_SOURCE = 12`
 
-**Generation token limits** (`config.py`, `groq_llm.py`, `rag/answer_generator.py`):
+**Generation token limit** (`config.py`, `groq_llm.py`):
 - Normal generation: `GENERATION_MAX_TOKENS = 1800`
-- Repair generation (citation repair): `REPAIR_MAX_TOKENS = 2200`
+- Citation repair is deterministic (marker removal + re-append), not a second LLM call.
 
 These are separate layers (retrieval → evidence selection → prompt assembly → generation) and are not contradictory. Each bounds a different stage of the pipeline.
 

@@ -121,8 +121,12 @@ class TestBranchBehavior:
         return service._build_stage1_branches(query, cls, query), cls
 
     def test_pmfby_stateless_branches_bounded(self):
+        # P1: no-signal PMFBY is central with no invented state; branch
+        # count stays bounded.
         branches, cls = self._branches("What is PMFBY?")
-        assert cls.assumed_state is True
+        assert cls.state is None
+        assert cls.jurisdiction == "central"
+        assert cls.assumed_state is False
         assert len(branches) <= WebDiscoveryService.MAX_BRANCHES
 
     def test_pmfby_gujarat_explicit(self):

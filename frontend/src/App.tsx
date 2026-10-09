@@ -42,12 +42,41 @@ function AuthTokenBridge() {
   return null;
 }
 
+const CLERK_PUBLISHABLE_KEY = import.meta.env
+  .VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const CLERK_SIGN_IN_URL = (import.meta.env.VITE_CLERK_SIGN_IN_URL as
+  | string
+  | undefined) ?? "/sign-in";
+const CLERK_SIGN_UP_URL = (import.meta.env.VITE_CLERK_SIGN_UP_URL as
+  | string
+  | undefined) ?? "/sign-up";
+
 export default function App() {
+  // Fail loudly instead of a blank white page: Vite only exposes VITE_-
+  // prefixed vars, so a key kept under the old NEXT_PUBLIC_ name (or missing
+  // from .env.local) arrives here as undefined and Clerk would render nothing.
+  if (!CLERK_PUBLISHABLE_KEY) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center px-4 text-center">
+        <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--muted)]">
+          Configuration error
+        </p>
+        <h1 className="mt-3 text-[24px] font-medium text-[var(--ink)]">
+          Sign-in is not configured
+        </h1>
+        <p className="mt-3 max-w-md text-[15px] leading-[1.7] text-[var(--body)]">
+          VITE_CLERK_PUBLISHABLE_KEY is missing. Copy it from .env.example into
+          .env.local and restart `npm run dev`.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <ClerkProvider
-      publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
-      signInUrl={import.meta.env.VITE_CLERK_SIGN_IN_URL}
-      signUpUrl={import.meta.env.VITE_CLERK_SIGN_UP_URL}
+      publishableKey={CLERK_PUBLISHABLE_KEY}
+      signInUrl={CLERK_SIGN_IN_URL}
+      signUpUrl={CLERK_SIGN_UP_URL}
     >
       <BrowserRouter>
         <LanguageProvider>

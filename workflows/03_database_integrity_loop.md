@@ -2,7 +2,9 @@
 
 **Purpose:** Verify that Supabase contains a structurally valid corpus — no orphans, no duplicates, no wrong dimensions, no stale data — after every ingestion run.
 
-**Status:** SPEC COMPLETE — READY FOR IMPLEMENTATION
+**Status:** SPEC SUPERSEDED — implemented differently (see note)
+
+> **Current state (code-grounded):** this loop was never built as specified — there is no `python -m eval.corpus_check` and no `eval/*.json` report writers. The closest code coverage is `backend/tests/test_schema_smoke.py` plus schema-level constraints in `backend/schema.sql`/migrations. `corpus/manifests/mvp_sources.yaml` exists. Treat the body below as the design record, not the implementation.
 
 ---
 

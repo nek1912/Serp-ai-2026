@@ -122,7 +122,7 @@ def test_chat_persists_on_out_of_scope(
     body = r.json()
     assert body["domain"] == "out_of_scope"
     assert mock_save.call_count == 2
-    mock_trim.assert_called_once_with(payload["session_id"], keep=50)
+    mock_trim.assert_called_once_with(payload["session_id"], keep=50, user_id="test-user")
 
 
 @patch("app.routes.chat.trim_messages")
@@ -171,7 +171,7 @@ def test_chat_persists_on_success(
         r = client.post("/chat", json=payload)
         assert r.status_code == 200
         assert mock_save.call_count == 2
-        mock_trim.assert_called_once_with(payload["session_id"], keep=50)
+        mock_trim.assert_called_once_with(payload["session_id"], keep=50, user_id="test-user")
 
 
 @respx.mock
@@ -187,7 +187,7 @@ def test_chat_resolves_contextual_followup_question(respx_mock):
             "document_id": "dddd1111-2222-3333-4444-555555555555",
             "title": "PMFBY FAQ", "page": 1, "page_start": 1, "page_end": 1,
             "section": "Eligibility", "subsection": None, "clause": None,
-            "content": "Eligible farmers are covered.", "similarity": 0.72,
+            "content": "PMFBY eligibility: eligible farmers are covered.", "similarity": 0.72,
             "source_url": "https://pmfby.gov.in/faq", "source_file": "pmfby.gov.in/faq",
             "domain": "pmfby", "jurisdiction": "central", "state": None}, {
             "chunk_id": "bbbbbbbb-5555-6666-7777-888888888888",
@@ -195,7 +195,7 @@ def test_chat_resolves_contextual_followup_question(respx_mock):
             "document_id": "eeee1111-2222-3333-4444-555555555555",
             "title": "PMFBY Guidelines", "page": 4, "page_start": 4, "page_end": 4,
             "section": "Coverage", "subsection": None, "clause": None,
-            "content": "Coverage extends to notified crops.", "similarity": 0.51,
+            "content": "PMFBY coverage extends to notified crops.", "similarity": 0.51,
             "source_url": "https://pmfby.gov.in/guidelines",
             "source_file": "pmfby.gov.in/guidelines",
             "domain": "pmfby", "jurisdiction": "central", "state": None}]))

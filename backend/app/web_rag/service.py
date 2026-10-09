@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urlparse
@@ -98,6 +99,19 @@ from app.web_rag.web_cleaner import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_API_KEY_PARAM_RE = re.compile(r"(api_key=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _sanitize_provider_error(exc: Exception) -> str:
+    """Redact embedded API keys from a provider error before logging.
+
+    SerpApi failures surface the full request URL (including api_key=...)
+    via the httpx/respx exception text. Tavily/Firecrawl use headers, but
+    this scrub is provider-agnostic. Truncates to 300 chars like before.
+    """
+    return _API_KEY_PARAM_RE.sub(r"\1[REDACTED]", str(exc))[:300]
 
 
 OFFICIAL_DOMAINS = [
@@ -1136,6 +1150,7 @@ class WebDiscoveryService:
         )
 
         def _query_provider(provider: Any) -> list:
+            _t_start = time.monotonic()
             try:
 
                 response = provider.search(
@@ -1152,10 +1167,17 @@ class WebDiscoveryService:
             except Exception as exc:
                 # A single provider failing must not break discovery, but
                 # hide neither the reason nor the affected provider.
+                # Sanitize first: SerpApi errors embed the full request URL
+                # including api_key=..., which must never reach the logs.
+                _elapsed_ms = (time.monotonic() - _t_start) * 1000
+                _err_text = _sanitize_provider_error(exc)
+                _is_timeout = "timeout" in _err_text.lower() or "timed out" in _err_text.lower()
                 logger.warning(
-                    "Web discovery provider failed: provider=%s error=%s",
+                    "Web discovery provider failed: provider=%s timeout=%s elapsed_ms=%.0f error=%s",
                     type(provider).__name__,
-                    str(exc)[:300],
+                    _is_timeout,
+                    _elapsed_ms,
+                    _err_text,
                 )
                 return []
 
@@ -1170,7 +1192,19 @@ class WebDiscoveryService:
                 )
                 else []
             )
-            return items if isinstance(items, list) else []
+            items = items if isinstance(items, list) else []
+            _elapsed_ms = (time.monotonic() - _t_start) * 1000
+            if not items:
+                # Empty is not an exception (e.g. SerpApi "no results"):
+                # log at info so timeout-storms vs genuine empty results
+                # are distinguishable in future log triage.
+                logger.info(
+                    "Web discovery provider empty: provider=%s elapsed_ms=%.0f query=%.80s",
+                    type(provider).__name__,
+                    _elapsed_ms,
+                    query,
+                )
+            return items
 
         with ThreadPoolExecutor(max_workers=max(1, len(providers))) as executor:
             per_provider_results = list(executor.map(_query_provider, providers))

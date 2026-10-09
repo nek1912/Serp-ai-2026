@@ -23,7 +23,7 @@
 
 ## Domain Routing Rules
 
-1. **Exact match only.** The `match_chunks` RPC uses `d.domain = match_domain`. No prefix/contains matching.
+1. **Exact match only.** The `match_chunks` RPC uses `c.domain = match_domain` (`backend/schema.sql`). No prefix/contains matching.
 
 2. **Classifier must emit only canonical IDs.** If the classifier returns a non-canonical ID, it's a bug.
 
@@ -51,14 +51,12 @@
 | Keyword rules | Canonical IDs | `backend/data/keyword_rules.json` |
 | Anchor classifier | Canonical IDs | `backend/data/domain_anchors.json` |
 | Database documents | Canonical IDs | `documents.domain` column |
-| Gold cases | Canonical IDs | `eval/gold_cases.yaml` `expected_domain` |
-| Evaluation scripts | Canonical IDs | `eval/gate2_config.yaml` |
+| Gold cases | Canonical IDs | `backend/tests/eval_rag_v3.py` expected domains |
+| Evaluation scripts | Canonical IDs | `backend/tests/eval_rag_v3.py` |
 
 ---
 
 ## Verification
 
-After any domain taxonomy change:
-1. Run `python -m eval.corpus_check` — all document domains must be canonical
-2. Run `python -m eval.run_retrieval_eval` — classifier must emit canonical IDs
-3. Run `pytest tests/test_domains.py -v` — domain classification tests must pass
+After any domain taxonomy change (from `backend/`):
+1. Run domain classification tests: `pytest tests/test_domains.py -v` — classifier must emit canonical IDs

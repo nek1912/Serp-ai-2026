@@ -31,22 +31,30 @@ def resolve_and_remember(
     session_id: str,
     input_text: str,
     ui_language_explicit: str | None = None,
+    user_id: str | None = None,
 ) -> str:
+    """Resolve response language with owner-namespaced memory.
+
+    user_id is the authenticated Clerk sub (None preserves the legacy
+    offline/test path). Memory is keyed by (user_id, session_id) so a
+    foreign session_id can neither read nor overwrite another owner's
+    remembered language.
+    """
     detected = detect_query_languages(input_text or "")
     explicit_request = detected.get("explicit_request")
 
     # 1) explicit request embedded in the query text
     if _is_supported(explicit_request):
-        set_session_language(session_id, explicit_request)
+        set_session_language(session_id, explicit_request, user_id=user_id)
         return explicit_request
 
     # 2) explicit UI language selection from the frontend
     if _is_supported(ui_language_explicit):
-        set_session_language(session_id, ui_language_explicit)
+        set_session_language(session_id, ui_language_explicit, user_id=user_id)
         return ui_language_explicit
 
     # 3) existing remembered session language
-    existing = get_session_language(session_id)
+    existing = get_session_language(session_id, user_id=user_id)
     if _is_supported(existing):
         return existing
 

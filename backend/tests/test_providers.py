@@ -11,7 +11,7 @@ def test_embed_returns_768_per_text(respx_mock):
         return_value=httpx.Response(200, json=body)
     )
     provider = GeminiEmbeddingProvider(Settings(gemini_api_key="k", groq_api_key="g",
-        supabase_url="u", supabase_service_key="s"))
+        supabase_url="u", supabase_service_key="s", embed_model="gemini-embedding-2"))
     out = provider.embed_texts(["a", "b"])
     assert len(out) == 2 and len(out[0]) == 768
 

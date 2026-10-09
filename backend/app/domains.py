@@ -41,6 +41,27 @@ class AnchorStore:
             return "out_of_scope", float(scores[best])
         return self.domains[best], float(scores[best])
 
+    def collect_hits(self, text: str) -> list[str]:
+        lowered = text.lower()
+        hits: list[str] = []
+        for domain, keywords in self.rules.items():
+            for kw in keywords:
+                if " " in kw:
+                    if kw in lowered:
+                        hits.append(domain)
+                        break
+                else:
+                    if re.search(r"\b" + re.escape(kw) + r"\b", lowered):
+                        hits.append(domain)
+                        break
+        # scheme-code identifiers not in keyword_rules
+        extra = {"pm-kisan": "schemes", "pmkisan": "schemes",
+                 "farmer registry": "schemes", "farmer id": "schemes"}
+        for k, d in extra.items():
+            if k in lowered and d not in hits:
+                hits.append(d)
+        return hits
+
 
 @lru_cache(maxsize=1)
 def load_anchor_store(embed_texts, rules_path: Path = DATA_DIR / "keyword_rules.json",

@@ -31,7 +31,8 @@ cp .env.example .env    # then fill in the values
 | `VITE_PORT` | dev only | Vite dev-server port (default 5173) |
 
 Only `VITE_`-prefixed variables reach the browser bundle. `CLERK_SECRET_KEY` is
-never needed here; it lives in the repo-root `.env` and stays inside the backend.
+never needed here; it lives in `backend/.env` (the backend's only config source)
+and stays inside the backend.
 
 Add your sign-in and sign-up URLs as **redirect URLs** in the Clerk dashboard.
 

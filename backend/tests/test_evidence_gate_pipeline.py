@@ -44,9 +44,13 @@ def _mock_chunks(
 ) -> list[dict]:
     """Create mock Supabase RPC response chunks."""
     sims = similarities or [0.72, 0.51, 0.35]
+    # Chunk-id prefixes MUST be distinct: the citation verifier treats an
+    # 8-char prefix matching >1 retrieved chunk as ambiguous → invalid, so
+    # shared "aaaaaaaa" prefixes would (correctly) fail verification.
+    prefixes = ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd", "eeeeeeee"]
     return [
         {
-            "chunk_id": f"aaaaaaaa-{i:04d}-2222-3333-444444444444",
+            "chunk_id": f"{prefixes[i % len(prefixes)]}-{i:04d}-2222-3333-444444444444",
             "stable_chunk_id": f"{domain}-faq:p{i+1}:c0",
             "document_id": f"dddd{i:04d}-2222-3333-4444-555555555555",
             "title": f"{domain.upper()} Document {i}",
@@ -56,7 +60,9 @@ def _mock_chunks(
             "section": "Section",
             "subsection": None,
             "clause": None,
-            "content": f"Content about {domain}",
+            # Content names the domain (real chunks do) so entity grounding
+            # ("PMFBY", ...) resolves instead of flagging test answers.
+            "content": f"Content about {domain.upper()}",
             "similarity": sim,
             "source_url": f"https://{domain}.example.com/{i}",
             "source_file": f"{domain}.pdf",

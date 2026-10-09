@@ -1,3 +1,4 @@
+import re
 import time
 from collections import deque
 from functools import lru_cache
@@ -8,6 +9,20 @@ from app.config import EMBED_DIMS, REQUEST_TIMEOUT_S, Settings, get_settings
 from app.key_rotator import KeyRotator
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _http_status_of(exc: Exception) -> int | None:
+    """Best-effort HTTP status extraction for retry decisions.
+
+    httpx errors carry .response.status_code; the Jina inner call raises
+    RuntimeError("Jina embedding HTTP {status}: ...") instead, so parse
+    the status back out of the message. Returns None when the error has
+    no HTTP status (non-HTTP failures are retried with backoff).
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    m = re.search(r"HTTP (\d{3})", str(exc))
+    return int(m.group(1)) if m else None
 
 # Jina free tier: 100k tokens/minute. Pace below that to avoid persistent 429s.
 _TPM_LIMIT = 85_000
@@ -80,9 +95,10 @@ class JinaEmbeddingProvider:
                 if self._rotator:
                     return self._rotator.try_keys(_call_with_key)
                 return _call_with_key(self._key)
-            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
+            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, RuntimeError) as exc:
                 last_exc = exc
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in _RETRYABLE_STATUS:
+                status = _http_status_of(exc)
+                if status is not None and status not in _RETRYABLE_STATUS:
                     raise
                 if attempt < self._max_attempts - 1:
                     time.sleep(self._base_delay * (2 ** attempt))
@@ -108,6 +124,12 @@ class JinaEmbeddingProvider:
 class GeminiEmbeddingProvider:
     def __init__(self, settings: Settings):
         self._key = settings.gemini_api_key
+        if not settings.embed_model:
+            # Fail fast: without EMBED_MODEL the endpoint URL contains an
+            # empty model segment (".../models/:embedContent") and every
+            # request 404s. NOTE: EMBED_MODEL (Gemini model id) is NOT
+            # EMBEDDING_MODEL (Jina model name) — see config.py.
+            raise RuntimeError("EMBED_MODEL not configured for Gemini embeddings")
         self._endpoint = ("https://generativelanguage.googleapis.com/v1beta/models/"
                           f"{settings.embed_model}:embedContent")
         self._max_attempts = 3

@@ -58,6 +58,7 @@ class StaticRAGService:
         domain: str,
         state: str | None,
         k: int | None = None,
+        as_of_date: str | None = None,
     ) -> RAGResult:
         """Run static RAG pipeline and return typed result.
 
@@ -66,8 +67,11 @@ class StaticRAGService:
             query: English query text.
             domain: Requested domain (raw, before _DOMAIN_MAP).
             state: Requested state filter (or None for central only).
-            k: Number of chunks to retrieve. Defaults to 25 if reranker
-               enabled, else 6.
+            k: Number of chunks to retrieve. Defaults to 25 (the old
+               25-if-reranked-else-6 split was removed; retrieval always
+               fetches 25 and the reranker truncates to top_n=15).
+            as_of_date: Optional ISO date for effective-date filtering at
+                the SQL layer (passed through to match_chunks).
 
         Returns:
             RAGResult with chunks, abstention info, and confidence band.
@@ -79,7 +83,8 @@ class StaticRAGService:
         try:
             supabase = get_supabase()
             chunks = self._retrieve_hybrid(
-                supabase, embedding, query, retrieval_domain, state, k=effective_k,
+                supabase, embedding, query, retrieval_domain, state,
+                k=effective_k, as_of_date=as_of_date,
             )
         except Exception:
             logger.exception("Static RAG retrieval failed")
@@ -148,9 +153,12 @@ class StaticRAGService:
     def _retrieve_hybrid(
         supabase, query_embedding: list[float], query_text: str,
         domain: str, state: str | None, k: int = 6,
+        as_of_date: str | None = None,
     ) -> list[RetrievedChunk]:
         """Hybrid retrieval: dense + lexical with RRF fusion."""
-        dense_chunks = _dense_retrieve(supabase, query_embedding, domain, state, k=k)
+        dense_chunks = _dense_retrieve(
+            supabase, query_embedding, domain, state, k=k, as_of_date=as_of_date,
+        )
         try:
             lexical_chunks = _lexical_retrieve(supabase, query_text, domain, state, k=k)
         except Exception:
@@ -229,20 +237,45 @@ class StaticRAGService:
 
 
 def _dense_retrieve(supabase, query_embedding: list[float], domain: str,
-                    state: str | None, k: int = 10) -> list[RetrievedChunk]:
-    """Dense retrieval via match_chunks RPC."""
-    rows = supabase.rpc("match_chunks", {
+                    state: str | None, k: int = 10,
+                    as_of_date: str | None = None,
+                    match_entity_id: str | None = None) -> list[RetrievedChunk]:
+    """Dense retrieval via match_chunks RPC.
+
+    PostgREST selects among overloaded match_chunks functions by the set
+    of body keys. Live DBs carry both the legacy 4-arg overload and the
+    newer 6-arg overload (as_of_date + match_entity_id); a 4-key call
+    matches both and fails with 300/PGRST203. Always sending all 6 keys
+    selects the 6-arg overload unambiguously (null extras = no filtering,
+    i.e. legacy-equivalent behavior).
+    """
+    params = {
         "query_embedding": query_embedding,
         "match_domain": domain,
         "match_state": state,
         "match_count": k,
-        # Named explicitly to disambiguate the two overloaded match_chunks
-        # signatures in the database. See app/retrieval/__init__.py: PostgREST
-        # raises PGRST203 on a 4-arg call, which silently zeroed out static
-        # retrieval and made every answer abstain.
-        "as_of_date": None,
-        "match_entity_id": None,
-    }).execute().data or []
+        "as_of_date": as_of_date,
+        "match_entity_id": match_entity_id,
+    }
+    try:
+        rows = supabase.rpc("match_chunks", params).execute().data or []
+    except Exception as e:
+        # Backward compat with DBs that only have the legacy overload:
+        # PostgREST reports "no matching overload" (PGRST202) when the
+        # 6-key call matches nothing. Only then retry the legacy 4-key
+        # call. PGRST203 (ambiguity) must NOT fall back — fewer keys
+        # re-trigger it.
+        msg = str(e)
+        code = getattr(e, "code", "") or ""
+        if "PGRST202" in code or "PGRST202" in msg or "Could not find the function" in msg:
+            rows = supabase.rpc("match_chunks", {
+                "query_embedding": query_embedding,
+                "match_domain": domain,
+                "match_state": state,
+                "match_count": k,
+            }).execute().data or []
+        else:
+            raise
     return [
         RetrievedChunk(
             chunk_id=str(r.get("chunk_id") or r["id"]),

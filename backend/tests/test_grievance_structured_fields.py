@@ -214,7 +214,7 @@ class TestStructuredFieldsFinalizeEndpoint:
                  return_value=_MOCK_SUBMISSION,
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-fields", language="en")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         grievance = result["grievance"]
         assert "fields" in grievance, "finalize response must contain 'fields'"
@@ -247,7 +247,7 @@ class TestStructuredFieldsFinalizeEndpoint:
                  return_value=_MOCK_SUBMISSION,
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-mirror-fields", language="hi")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         english = result["grievance"].get("english")
         assert english is not None, "english_mirror must be present"
@@ -287,7 +287,7 @@ class TestStructuredFieldsFinalizeEndpoint:
                  ),
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-no-fields", language="en")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         assert result["grievance"]["fields"] is None
 
@@ -310,7 +310,7 @@ class TestStructuredFieldsFinalizeEndpoint:
                  return_value=_MOCK_SUBMISSION,
              ):
             req = GrievanceFinalizeRequest(conversation_id="test-conv-loc-desc", language="en")
-            result = finalize_grievance_draft(req)
+            result = finalize_grievance_draft(req, user_id="test-user")
 
         g = result["grievance"]
         assert g["location"]["state"] == "Gujarat"

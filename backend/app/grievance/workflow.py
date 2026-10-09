@@ -48,9 +48,20 @@ def load_grievance_state(conversation_id: str) -> GrievanceState | None:
 
 
 def save_grievance_state(state: GrievanceState) -> None:
-    """Save grievance state to Supabase. Silently ignore DB errors in test env."""
+    """Save grievance state to Supabase. Silently ignore DB errors in test env.
+
+    Ownership gate (mirrors session_store.touch_session): when a row already
+    exists for this conversation_id but is owned by someone else, the write
+    is a no-op — never overwrite another owner's workflow.
+    """
     state.updated_at = datetime.now(timezone.utc).isoformat()
     sb = get_supabase()
+    try:
+        existing = load_grievance_state(state.conversation_id)
+    except Exception:
+        existing = None
+    if existing is not None and getattr(existing, "user_id", None) != state.user_id:
+        return
     try:
         sb.table("grievance_states").upsert(
             {
@@ -134,9 +145,16 @@ class GrievanceWorkflow:
         conversation_id: str,
         user_id: str,
     ) -> WorkflowResult:
-        """Process a user message in the grievance workflow."""
+        """Process a user message in the grievance workflow.
+
+        Ownership: a stored state owned by someone else collapses to a
+        fresh state for the caller — identical to no prior workflow, so
+        one user's draft/fields are never visible to another. Combined
+        with the save-gate below, a foreign caller can neither read nor
+        overwrite another owner's workflow.
+        """
         state = load_grievance_state(conversation_id)
-        if state is None:
+        if state is None or getattr(state, "user_id", None) != user_id:
             state = GrievanceState(
                 conversation_id=conversation_id,
                 user_id=user_id,
