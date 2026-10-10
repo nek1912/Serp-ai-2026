@@ -332,7 +332,15 @@ class TestEnToGuLongChunk2Fails:
 
 class TestAzureFallbackForMultiChunkFailure:
     def test_azure_reached_when_sarvam_fails(self):
-        """When Sarvam fails on multi-chunk text, Azure fallback runs on full text."""
+        """When Sarvam fails on multi-chunk text, Azure fallback runs on full text.
+
+        NOTE: If Azure also returns English (like 'translated by azure'), the
+        post-translation _appears_to_be_english check rejects it, because the
+        invariant is: for a non-English target, the returned text must NOT appear
+        to be English. The function then returns the original English text with
+        tokens restored, which is the correct behavior — never silently show
+        English when the target is Gujarati.
+        """
         from app.routes.chat import _translate_from_english
 
         settings = _settings_stub()
@@ -356,11 +364,19 @@ class TestAzureFallbackForMultiChunkFailure:
             mock_sarvam.translate.assert_called_once()
             # Azure was actually reached as fallback
             mock_azure.translate.assert_called_once()
-            # Azure's translation is the result
-            assert result == "translated by azure"
+            # Azure returned English ("translated by azure"), which still appears
+            # English, so _translate_from_english falls through to returning the
+            # original English text (translation failed for both providers).
+            assert result == long_text
 
     def test_azure_receives_full_original_text(self):
-        """Azure fallback receives the FULL original text, not partial chunks."""
+        """Azure fallback receives the FULL original text, not partial chunks.
+
+        Even though Azure returns English ("Azure translation"), the function
+        still calls Azure with the full original text. The post-translation
+        check then rejects the English result, but the test verifies the correct
+        input was sent to Azure.
+        """
         from app.routes.chat import _translate_from_english
 
         settings = _settings_stub()
@@ -380,7 +396,8 @@ class TestAzureFallbackForMultiChunkFailure:
 
                 _translate_from_english(long_text, "gu", settings)
 
-            # Azure received the full original text
+            # Azure received the full original text (even though its English
+            # output will be rejected by the post-translation check)
             call_args = mock_azure.translate.call_args
             azure_text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
             assert azure_text == long_text

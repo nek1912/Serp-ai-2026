@@ -728,6 +728,11 @@ def _translate_from_english(text: str, target_lang: str, settings: Settings) -> 
     providers fail.  The caller MUST check whether the result actually
     changed — a returned English string means translation failed, not
     that the text was already in the target language.
+
+    Key invariant: for a non-English target, the returned text must NOT
+    appear to be English. If both providers return English unchanged,
+    the text is returned as-is (with citation/URL tokens restored) so
+    the caller can decide how to handle the failure.
     """
     if target_lang == "en":
         return text
@@ -746,6 +751,12 @@ def _translate_from_english(text: str, target_lang: str, settings: Settings) -> 
         token = f"RAGURL{_alpha_index(index)}END"
         citation_tokens[token] = url
         protected_text = protected_text.replace(url, token, 1)
+
+    # Try Sarvam first. Collect the result even if it appears unchanged,
+    # because a partial translation (some chunks translated, others not)
+    # is better than nothing — the post-translation English check below
+    # will catch fully-English output.
+    translated = None
     sarvam = SarvamTranslator(settings)
     if sarvam.configured:
         try:
@@ -755,23 +766,66 @@ def _translate_from_english(text: str, target_lang: str, settings: Settings) -> 
                 source="en",
                 translation_stage="final_answer",
             )
-            if translated != protected_text:
-                translated = _restore_translation_tokens(translated, citation_tokens)
-                logger.info(
-                    "translation_stage=final_answer final_translation_ms=%.0f",
-                    (time.monotonic() - translation_start) * 1000,
-                )
-                return translated
         except Exception:
             logger.warning("Sarvam back-translation failed")
+            translated = None
+
+    # If Sarvam returned something different from the input, use it — but
+    # restore citation/URL tokens first. Even a partially-translated result
+    # is usually better than raw English for Indian-language users.
+    if translated is not None and translated != protected_text:
+        translated = _restore_translation_tokens(translated, citation_tokens)
+        logger.info(
+            "translation_stage=final_answer final_translation_ms=%.0f",
+            (time.monotonic() - translation_start) * 1000,
+        )
+        # NOTES: if translated != protected_text but the result still appears
+        # to be English (e.g. Sarvam only translated some chunks), the
+        # caller's _appears_to_be_english check will catch it and try Azure.
+        # Do NOT return early here if the result looks English — fall through
+        # to Azure for a second attempt.
+        if not _appears_to_be_english(translated):
+            return translated
+        # Sarvam returned something different but it still looks English —
+        # treat as a failed translation and fall through to Azure.
+        logger.warning(
+            "Sarvam returned text that still appears English for lang=%s; trying Azure",
+            target_lang,
+        )
+        translated = None  # reset so Azure gets a chance
+
+    # Try Azure as second attempt. Also try Azure if Sarvam was unconfigured
+    # or returned English — Azure may succeed where Sarvam did not.
+    azure_translated = None
     try:
-        translated = AzureTranslator(settings).translate(protected_text, to=target_lang, source="en")
-        if translated != protected_text:
-            return _restore_translation_tokens(translated, citation_tokens)
+        azure_translated = AzureTranslator(settings).translate(
+            protected_text, to=target_lang, source="en"
+        )
     except Exception:
         logger.warning("Azure back-translation failed")
-    logger.warning("All translation providers failed for '%s' → %s", target_lang, text[:80])
-    return text
+        azure_translated = None
+
+    if azure_translated is not None and azure_translated != protected_text:
+        azure_translated = _restore_translation_tokens(azure_translated, citation_tokens)
+        if not _appears_to_be_english(azure_translated):
+            logger.info(
+                "translation_stage=final_answer final_translation_ms=%.0f",
+                (time.monotonic() - translation_start) * 1000,
+            )
+            return azure_translated
+        logger.warning(
+            "Azure also returned text that appears English for lang=%s",
+            target_lang,
+        )
+
+    # Both providers failed to produce non-English output. Restore tokens
+    # on the original text and return it so the caller can present English
+    # with a Hindi disclaimer rather than silently showing raw English.
+    logger.warning(
+        "All translation providers failed for '%s' → presenting English answer",
+        target_lang,
+    )
+    return _restore_translation_tokens(protected_text, citation_tokens)
 
 
 def _restore_translation_tokens(text: str, tokens: dict[str, str]) -> str:
