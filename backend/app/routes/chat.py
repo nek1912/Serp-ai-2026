@@ -690,6 +690,37 @@ def _alpha_index(index: int) -> str:
             return letters
 
 
+def _appears_to_be_english(text: str) -> bool:
+    """Detect whether text is predominantly English.
+
+    Used to decide whether post-LLM translation is needed. The LLM is
+    instructed to write directly in the user's language, so English output
+    means the instruction was not followed and translation is required.
+
+    Heuristic: fraction of ASCII letters that are English-alphabet characters.
+    Indian-script text (Devanagari, Bengali, etc.) has very few ASCII letters
+    beyond numbers, URLs, and scheme acronyms — so a high ASCII-letter ratio
+    indicates English.
+
+    Returns True when the text is likely English; False for non-Latin scripts.
+    When uncertain (short text, mixed content), errs toward True so that
+    translation is attempted rather than silently showing English.
+    """
+    if not text:
+        return True  # empty → treat as English (translation is a no-op anyway)
+    ascii_letters = sum(1 for c in text if c.isascii() and c.isalpha())
+    total_letters = sum(1 for c in text if c.isalpha())
+    if total_letters == 0:
+        return True  # no letters at all (numbers, symbols) → assume English
+    ratio = ascii_letters / total_letters
+    # Threshold: >0.55 ASCII-letter ratio → English. Indian scripts like Devanagari
+    # have mostly non-ASCII letters, so their ratio is well below 0.30.
+    # The 0.55 threshold is conservative: mixed Hindi+English text (common in
+    # Indian-language output) still has ratio < 0.55 because the Hindi words
+    # dominate the letter count.
+    return ratio > 0.55
+
+
 def _translate_from_english(text: str, target_lang: str, settings: Settings) -> str:
     """Translate English text to target_lang via Sarvam → Azure fallback.
 
@@ -1156,11 +1187,25 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
             as_of_date=req.as_of_date,
         )
 
-        # The LLM is instructed to respond in the user's language directly.
-        # This translation call is a secondary safety net for any edge case
-        # where the LLM does not fully comply with the language instruction.
-        if ctx.lang != "en":
+        # The LLM is instructed via the prompt to write directly in the user's
+        # language (see build_curated_prompt: "Write your ENTIRE response in
+        # {lang_name}. This is mandatory."). Translation here is a FALLBACK only:
+        # if the LLM output is detected to still be in English, translate it.
+        # This avoids double-translating already-localised text and preserves
+        # markdown formatting that translation APIs would otherwise mangle.
+        if ctx.lang != "en" and _appears_to_be_english(rag_response.answer):
             rag_response.answer = _translate_from_english(rag_response.answer, ctx.lang, ctx.settings)
+            # After fallback translation, re-check: if the result is still
+            # English, the translation failed — keep the English text rather
+            # than presenting mixed-language output.
+            if _appears_to_be_english(rag_response.answer):
+                logger.warning(
+                    "LLM output stayed English after translation fallback for lang=%s; presenting English answer",
+                    ctx.lang,
+                )
+        # Only regenerate speech data if not abstained — the orchestrator sets
+        # empty speech_segments for abstentions, and we must preserve that.
+        if not rag_response.abstained:
             rag_response.speech_text = prepare_speech_text(rag_response.answer)
             rag_response.speech_segments = segment_speech(rag_response.answer, ctx.lang)
 
@@ -1517,8 +1562,14 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
             )
 
             # Keep the final language conversion at one explicit response boundary.
-            if ctx.lang != "en":
+            # The LLM is instructed to write directly in the user's language;
+            # translation here is a fallback only when the output is detected
+            # to still be in English.
+            if ctx.lang != "en" and _appears_to_be_english(rag_response.answer):
                 rag_response.answer = _translate_from_english(rag_response.answer, ctx.lang, ctx.settings)
+            # Only regenerate speech data if not abstained — the orchestrator sets
+            # empty speech_segments for abstentions, and we must preserve that.
+            if not rag_response.abstained:
                 rag_response.speech_text = prepare_speech_text(rag_response.answer)
                 rag_response.speech_segments = segment_speech(rag_response.answer, ctx.lang)
 

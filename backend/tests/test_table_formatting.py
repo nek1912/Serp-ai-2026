@@ -20,6 +20,46 @@ class TestBrokenTables:
         # Should convert to bullet list or proper table
         assert '|' not in result or is_valid_table(result)
         
+    def test_table_without_separator_row_preserved(self):
+        """Test that tables with header + data rows but no separator are preserved.
+        
+        This is the common case with LLM-generated tables in Indian languages
+        where the separator row (|---|) is often omitted.
+        """
+        input_text = (
+            "**મુખ્ય ઘટકો**\n\n"
+            "| ઘટક | વર્તન | સંબંધિત પુરાવો |\n"
+            "| નાણાકીય જ્ઞાન | નાણાકીય ઉત્પાદનો વિશે મૂળભૂત જ્ઞાન | બેંકિંગ, વીમા |\n"
+            "| નાણાકીય વર્તન | બજેટ બનાવવું, બચત કરવી | નિયમિત બચત |\n"
+        )
+        result = fix_broken_tables(input_text)
+        # Should preserve the table structure (not convert to bullet list)
+        assert "| ઘટક | વર્તન | સંબંધિત પુરાવો |" in result
+        assert "| નાણાકીય જ્ઞાન" in result
+        assert "| નાણાકીય વર્તન" in result
+        # Should have added a separator row
+        assert "|---|" in result or "|---|" in result.replace(" ", "")
+        
+    def test_single_pipe_line_converted_to_bullet(self):
+        """Test that a single line with pipes (not a table) is converted to bullet."""
+        input_text = "Precaution | What to do | Why important"
+        result = fix_broken_tables(input_text)
+        # Should be converted to bullet since it's not a proper table
+        assert "- " in result
+        assert "|" not in result
+        
+    def test_two_consecutive_pipe_lines_preserved(self):
+        """Test that two consecutive lines with pipes (header + data) are preserved."""
+        input_text = (
+            "| Criteria | Details |\n"
+            "| Age | Above 18 years |"
+        )
+        result = fix_broken_tables(input_text)
+        # Should preserve as table with added separator
+        assert "| Criteria | Details |" in result
+        assert "| Age | Above 18 years |" in result
+        assert "|---|" in result.replace(" ", "")
+        
 class TestCleanAnswer:
     """Tests for the clean_answer post-processor."""
 

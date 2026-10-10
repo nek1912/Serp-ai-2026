@@ -267,21 +267,24 @@ export function cleanMarkdownForDisplay(text: string): string {
   cleaned = cleaned.replace(/\[chunk:[^\]]*\]/gi, "");
   cleaned = cleaned.replace(/\(chunk:[^\)]*\)/gi, "");
 
-  // Clean empty format strings leftover from citation removal (e.g. **, * *, ())
+  // Clean empty format strings leftover from citation removal (e.g. ***, * *, ())
   cleaned = cleaned.replace(/\*\s*\*/g, "");
   cleaned = cleaned.replace(/\(\s*\)/g, "");
 
   // Fix unclosed/orphaned single asterisks attached to words before cell boundaries or newlines
-  cleaned = cleaned.replace(/(\w+)\*\s*(?=[\|\]\)\n])/g, "$1");
+  // Use Unicode-aware word boundary: match any script word characters (not just ASCII \w)
+  cleaned = cleaned.replace(/([\p{L}\p{N}]+)\*\s*(?=[\|\]\)\n])/gu, "$1");
 
   // Fix escaped asterisks (\*\* -> **)
   cleaned = cleaned.replace(/\\\*/g, "*");
 
   // Format bullet points: replace inline bullets (•) with newlines and markdown dash (- )
+  // The bullet character • (U+2022) is used across many languages including Indian scripts
   cleaned = cleaned.replace(/([^\n])\s*•\s*/g, "$1\n- ");
   cleaned = cleaned.replace(/^\s*•\s*/gm, "- ");
 
   // Ensure numbered list items on inline text get proper linebreaks
+  // Match any digit (including those in non-Latin scripts that use Arabic numerals)
   cleaned = cleaned.replace(/([^\n])\s*(\d+\.)\s+/g, "$1\n$2 ");
 
   // Preserve double newlines for paragraph breaks, remove excess newlines

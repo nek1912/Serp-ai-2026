@@ -34,6 +34,7 @@ from app.contracts import (
     AbstentionReason,
     ConfidenceBand,
     EvidenceChunk,
+    EvidenceSufficiency,
     RAGResponse,
     RAGResult,
 )
@@ -78,10 +79,25 @@ def fix_broken_tables(answer: str) -> str:
     1. Identifies lines that look like broken tables (have | but no proper header/separator)
     2. Attempts to reconstruct them as proper tables
     3. Falls back to stripping pipe characters if reconstruction fails
+    
+    A table is considered valid if it has:
+    - A header row (line starting and ending with |, containing text)
+    - At least one data row (line starting and ending with |, containing text)
+    - Optionally a separator row (|---|---|)
+    
+    Tables missing only the separator row are preserved as-is since
+    react-markdown/remark-gfm can still render them. Only truly broken
+    tables (pipe characters used as inline text separators, not table
+    structure) are converted to bullet lists.
     """
     lines = answer.split('\n')
     result = []
     i = 0
+    
+    # Pattern for a table header or data row: starts with |, has cells, ends with |
+    _TABLE_ROW_RE = re.compile(r'^\s*\|[^\n|]+\|(?:[^\n|]+\|)*\s*$')
+    # Pattern for a separator row: |---|---| etc.
+    _SEPARATOR_RE = re.compile(r'^\s*\|[\s\-:|]+\|\s*$')
     
     while i < len(lines):
         line = lines[i]
@@ -95,14 +111,28 @@ def fix_broken_tables(answer: str) -> str:
                 table_lines.append(lines[j])
                 j += 1
             
-            # Check if it's a valid table (has separator row)
-            has_separator = any(re.match(r'^\s*\|[\s\-|]+\|\s*$', tl) for tl in table_lines)
+            # Check if it's a valid table:
+            # - Has at least 2 rows that look like table rows (header + data)
+            # - OR has a separator row with at least 2 other rows
+            header_or_data_rows = [tl for tl in table_lines if _TABLE_ROW_RE.match(tl)]
+            has_separator = any(_SEPARATOR_RE.match(tl) for tl in table_lines)
             
-            if has_separator and len(table_lines) >= 3:
-                # Valid table — keep as is
-                result.extend(table_lines)
+            if (len(header_or_data_rows) >= 2) or (has_separator and len(table_lines) >= 2):
+                # Valid table structure — keep as is
+                # If missing separator row but has header + data, insert one
+                if not has_separator and len(header_or_data_rows) >= 2:
+                    # Insert separator row after the first header row
+                    first_row = table_lines[0]
+                    num_cols = first_row.count('|') - 1  # pipes between cells
+                    separator = "|" + "---|" * num_cols
+                    result.append(first_row)
+                    result.append(separator)
+                    result.extend(table_lines[1:])
+                else:
+                    result.extend(table_lines)
             else:
-                # Broken table — strip pipes and convert to bullet list
+                # Broken table — pipe characters used as inline text separators
+                # Convert to bullet list preserving content
                 for tl in table_lines:
                     cleaned = tl.replace('|', ' ').strip()
                     cleaned = re.sub(r'\s+', ' ', cleaned)
@@ -574,10 +604,13 @@ class RAGOrchestrator:
         # Step 11: Calculate confidence
         # Grounding repair caps the user-facing confidence: retrieval may be
         # HIGH but the final answer lost content, so it must not claim HIGH.
+        # Answerability from the evidence assessment keeps retrieval confidence
+        # from leaking into a high answer rating when evidence is insufficient.
         confidence, confidence_band = self._calculate_confidence(
             static_result, web_result, has_static, has_web,
             [],  # No claim verifications
             grounding_repaired=grounding_repaired,
+            answerability=assessment.sufficiency if assessment else None,
         )
         # Facet coverage penalty: scale confidence by the fraction of
         # supported facets. Fully supported coverage leaves confidence
@@ -586,7 +619,12 @@ class RAGOrchestrator:
             confidence = self._apply_facet_coverage_penalty(confidence, _facet_coverage)
 
         # Step 12: Build citations list
-        citations = self._build_citations(all_chunks)
+        # Only chunks actually cited in the answer become claim-supporting
+        # citations. Retrieved-but-uncited chunks remain available in the
+        # underlying evidence but are not presented as verified support.
+        citations = self._build_citations(
+            all_chunks, cited_chunk_ids=set(_extracted_ids)
+        )
 
         # Step 13: Prepare speech text
         speech_text = prepare_speech_text(answer)
@@ -1099,29 +1137,49 @@ class RAGOrchestrator:
         No ``\\b`` word-boundary anchors: claims such as ``12%`` or
         ``Rs.750`` end in non-word characters, where ``\\b`` never matches
         and the sentence silently survived repair.
+
+        Matches sentences terminated by ``.``, ``!``, or ``?``, and also
+        handles the final sentence when it has no trailing punctuation.
         """
         for claim in unsupported_claims:
             claim_text = getattr(claim, "claim_text", str(claim))
             if not claim_text.strip():
                 continue
-            # Remove the sentence containing the unsupported claim.
+            escaped = re.escape(claim_text)
+            # Remove sentence ending with ., !, or ?
             answer = re.sub(
-                rf"[^.]*{re.escape(claim_text)}[^.]*\.",
+                rf"[^.!?]*{escaped}[^.!?]*[.!?]",
                 "",
                 answer,
             )
-        # Clean up extra spaces
-        return re.sub(r"  +", " ", answer).strip()
+            # Remove final sentence without trailing punctuation (if the
+            # claim is in the last sentence and there is no terminator).
+            answer = re.sub(
+                rf"[^.!?]*{escaped}[^.!?]*$",
+                "",
+                answer,
+            )
+        # Clean up extra spaces and trailing punctuation artifacts
+        answer = re.sub(r"  +", " ", answer).strip()
+        answer = re.sub(r"[.!?]+$\s*", "", answer).strip()
+        return answer
 
     def _build_citations(
         self,
         chunks: list[EvidenceChunk],
+        cited_chunk_ids: set[str] | None = None,
     ) -> list[dict]:
         """Build the citations list for the API response.
 
         P1-1/P1-6: chunks tagged ``lead_only`` (secondary leads) or
         quarantined by impersonation screening are never authoritative
         evidence and are excluded here. Everything else is unchanged.
+
+        When ``cited_chunk_ids`` is provided, only chunks whose chunk_id
+        appears in that set are included — the response shows sources that
+        were actually cited in the answer, not every retrieved chunk.
+        When ``cited_chunk_ids`` is None (legacy path), all eligible
+        chunks are included for backward compatibility.
         """
         citations: list[dict] = []
         seen: set[str] = set()
@@ -1138,7 +1196,15 @@ class RAGOrchestrator:
             ):
                 continue
 
-            short_id = short_citation_id(chunk.chunk_id)
+            # When cited_chunk_ids is provided, only include chunks that were
+            # actually cited in the answer — not every retrieved chunk.
+            if cited_chunk_ids is not None:
+                short_id = short_citation_id(chunk.chunk_id)
+                if short_id not in cited_chunk_ids:
+                    continue
+            else:
+                short_id = short_citation_id(chunk.chunk_id)
+
             if short_id in seen:
                 continue
             seen.add(short_id)
@@ -1171,13 +1237,21 @@ class RAGOrchestrator:
         has_web: bool,
         claim_verifications: list | None = None,
         grounding_repaired: bool = False,
+        answerability: EvidenceSufficiency | None = None,
     ) -> tuple[float, ConfidenceBand]:
         """Compute claim-level confidence score and band from evidence.
 
-        After claim verification, confidence is adjusted based on:
-        - Number of unsupported claims (lower confidence)
-        - Number of filtered claims (lower confidence)
-        - Source quality (static + web dual-source boost)
+        Combines retrieval confidence (from evidence gate bands) with
+        answerability (from EvidenceController assessment) so that a
+        high retrieval score alone cannot produce a high answer confidence.
+
+        Retrieval confidence and answerability are tracked separately:
+        - retrieval_conf/conflict_band: how well the chunks scored
+        - answerability: whether the assessment says evidence can answer
+
+        When answerability is INSUFFICIENT or EMPTY, the answer confidence
+        is capped below HIGH regardless of retrieval band — an answer that
+        explicitly disclaims evidence cannot claim HIGH.
 
         grounding_repaired caps a repaired-but-supportable answer at MEDIUM:
         retrieval may be HIGH, but the final answer lost unsupported content,
@@ -1206,6 +1280,21 @@ class RAGOrchestrator:
             confidence = web_conf
         else:
             confidence = 0.0
+
+        # Answerability cap: when the evidence assessment says evidence is
+        # insufficient or empty, the answer confidence must not reach HIGH
+        # regardless of retrieval band. This prevents a high retrieval score
+        # from masking an answer that itself disclaims evidence.
+        if answerability is not None and answerability in (
+            EvidenceSufficiency.INSUFFICIENT,
+            EvidenceSufficiency.EMPTY,
+        ):
+            # Cap at MEDIUM boundary (below 0.7 HIGH threshold).
+            # Fully unsupported evidence cannot support a HIGH answer.
+            if confidence > 0.6:
+                confidence = 0.6
+            if band == ConfidenceBand.HIGH:
+                band = ConfidenceBand.MEDIUM
 
         # Adjust confidence based on claim verification results
         if claim_verifications is not None and len(claim_verifications) > 0:

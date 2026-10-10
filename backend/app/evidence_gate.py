@@ -76,10 +76,27 @@ def evidence_gate(
     if not domain_chunks:
         return True, AbstentionReason.DOMAIN_MISMATCH, ConfidenceBand.LOW
 
-    # Jurisdiction filter: central matches all; state must match expected_state
+    # Jurisdiction filter:
+    # - central chunks pass under any expected_state (central content is valid everywhere)
+    # - state chunks pass when expected_state is set AND the chunk's state matches
+    # - state chunks with no state field pass when expected_state is None (no state filter requested);
+    #   the chunk's state is unknown but the user did not ask for a specific state
+    # - state chunks with a mismatched state are dropped (they don't answer the requested state)
     jurisdiction_chunks: list[EvidenceChunk] = []
     for c in domain_chunks:
-        if c.jurisdiction == "central" or expected_state and c.state == expected_state:
+        if c.jurisdiction == "central":
+            jurisdiction_chunks.append(c)
+        elif expected_state and c.state == expected_state:
+            jurisdiction_chunks.append(c)
+        elif not expected_state and c.jurisdiction == "state" and c.state is None:
+            # State-jurisdiction chunk with unknown state, no state filter requested — pass.
+            # We cannot verify which state the chunk belongs to, but the user did not ask
+            # for a specific state, so rejection would discard potentially relevant evidence.
+            jurisdiction_chunks.append(c)
+        elif not expected_state and c.jurisdiction == "unknown":
+            # Unknown-jurisdiction chunk (no per-source or classification jurisdiction signal).
+            # With no state filter requested, this chunk is not proven state-specific — pass
+            # for consideration but at lower effective weight (the score check still applies).
             jurisdiction_chunks.append(c)
         # else: state-level chunk with mismatched state — drop it
 

@@ -101,6 +101,35 @@ def stamp_classification_state(
     return result
 
 
+def _jurisdiction_for_chunk(
+    source_jurisdiction: str | None,
+    classification_jurisdiction: str | None,
+) -> str:
+    """Resolve the EvidenceChunk jurisdiction from a web source dict.
+
+    Treats an empty/None jurisdiction as ``"unknown"``, not ``"central"``.
+    Central-only filtering is preserved: when the classification says the
+    query is central-jurisdiction AND the source carries no contradictory
+    per-source jurisdiction, the chunk is tagged ``"central"`` so it passes
+    the gate under any expected_state. When the source has its own explicit
+    jurisdiction, that value is preserved verbatim (including ``"state"``).
+
+    The distinction matters: ``"unknown"`` chunks are dropped by the gate
+    when expected_state is set (they cannot vouch for their state), but
+
+    ``"central"`` chunks pass under any expected_state. This prevents a
+
+    web source whose jurisdiction metadata is simply absent from being
+
+    silently treated as if it had been verified central.
+    """
+    if source_jurisdiction:
+        return source_jurisdiction
+    if classification_jurisdiction:
+        return classification_jurisdiction
+    return "unknown"
+
+
 class WebRAGService:
     """10-step web RAG pipeline returning evidence only.
 
@@ -782,7 +811,10 @@ class WebRAGService:
             page=source.get("page"),
             section=source.get("section", source.get("section_title", "")),
             domain=source.get("query_domain", classification_data.get("domain", "")),
-            jurisdiction=source.get("jurisdiction") or classification_data.get("jurisdiction") or "",
+            jurisdiction=_jurisdiction_for_chunk(
+                source.get("jurisdiction"),
+                classification_data.get("jurisdiction"),
+            ),
             state=source.get("state", classification_data.get("state")),
             dense_score=source.get("rerank_score", source.get("gemini_score")),
             bm25_score=source.get("bm25_score"),

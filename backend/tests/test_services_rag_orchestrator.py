@@ -631,7 +631,7 @@ class TestFullPipeline:
 
         static_chunks = [
             _make_evidence_chunk(
-                chunk_id="static-abc12345def67890",
+                chunk_id="static-abc12",
                 content="PMFBY premium is 2% for kharif crops.",
                 source_type="static",
                 title="PMFBY Guidelines",
@@ -641,7 +641,7 @@ class TestFullPipeline:
         ]
         web_chunks = [
             _make_evidence_chunk(
-                chunk_id="web-abc12345def67890",
+                chunk_id="web_abc12345_c0",
                 content="PMFBY covers all food crops.",
                 source_type="web",
                 title="PMFBY Overview",
@@ -669,11 +669,11 @@ class TestFullPipeline:
              )), \
              patch.object(orch._evidence_controller, "build_curated_prompt", return_value=("system", "user prompt")), \
              patch("app.services.rag_orchestrator.grounded_answer",
-                   return_value="PMFBY provides crop insurance with 2% premium [chunk:static-abc12345] and covers all food crops [chunk:web-abc12345]"), \
+                   return_value="PMFBY provides crop insurance with 2% premium [chunk:static-abc12] and covers all food crops [chunk:web_abc12345_c0]"), \
              patch("app.services.rag_orchestrator.verify_citations", return_value=VerificationResult(is_valid=True)), \
              patch("app.services.rag_orchestrator.strip_citations",
                    return_value=("PMFBY provides crop insurance with 2% premium and covers all food crops",
-                                 ["static-abc12345", "web-abc12345"])):
+                                 ["static-abc12", "web_abc12345_c0"])):
 
             response = await orch.run(
                 query="What is PMFBY?",
