@@ -324,6 +324,29 @@ export function cleanTextForSpeech(text: string): string {
   return cleaned;
 }
 
+/** Shown when the backend flags a chat message as a grievance. Chat never
+ *  processes grievances itself — it only offers a one-click redirect to the
+ *  dedicated Grievance panel, carrying the citizen's message over so they can
+ *  review it and hit "Next" immediately. */
+function GrievanceRedirectBanner({ text }: { text: string }) {
+  const { t } = useI18n();
+  return (
+    <div className="mt-3 rounded-[var(--radius-md)] border border-orange-200 bg-orange-50 p-3">
+      <p className="text-xs font-medium text-orange-900">
+        {t("chat.grievance.redirectNotice")}
+      </p>
+      <Link
+        to="/grievance"
+        state={{ prefill: text }}
+        className="mt-2 inline-flex items-center gap-1.5 rounded-[var(--radius-cta)] border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-800 transition-colors hover:bg-orange-100"
+      >
+        {t("chat.grievance.openPanel")}
+        <IconChevronRight className="h-3.5 w-3.5" />
+      </Link>
+    </div>
+  );
+}
+
 export function MessageBubble({ resp, isStreaming = false }: { resp: ChatResponse; isStreaming?: boolean }) {
   const { t } = useI18n();
   const speech = useMemo(() => createSpeechService(), []);
@@ -386,6 +409,9 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
               </div>
             )}
           </Alert>
+          {resp.grievance_redirect?.detected && (
+            <GrievanceRedirectBanner text={resp.grievance_redirect.text} />
+          )}
         </div>
       </div>
     );
@@ -400,14 +426,10 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
             {resp.mode && (
               <span
                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] sm:text-xs font-medium ${
-                  resp.mode === "web"
-                    ? "bg-blue-100 text-blue-800"
-                    : resp.mode === "grievance"
-                      ? "bg-orange-100 text-orange-800"
-                      : "bg-gray-100 text-gray-600"
+                  resp.mode === "web" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-600"
                 }`}
               >
-                {resp.mode === "web" ? t("chat.mode.webSearch") : resp.mode === "grievance" ? t("chat.mode.grievance") : t("chat.mode.staticRag")}
+                {resp.mode === "web" ? t("chat.mode.webSearch") : t("chat.mode.staticRag")}
               </span>
             )}
             <EvidenceBand confidence={resp.confidence} label={t(`evidence.${evidenceBand(resp.confidence)}`)} />
@@ -487,6 +509,10 @@ export function MessageBubble({ resp, isStreaming = false }: { resp: ChatRespons
               setExpandedChunkId(null);
             }}
           />
+        )}
+
+        {resp.grievance_redirect?.detected && (
+          <GrievanceRedirectBanner text={resp.grievance_redirect.text} />
         )}
 
         {resp.domain === "schemes" && (

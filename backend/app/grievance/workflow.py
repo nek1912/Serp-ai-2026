@@ -803,8 +803,14 @@ class GrievanceWorkflow:
         GrievanceCategory.REVENUE,
     })
 
-    def is_grievance_query(self, text: str) -> bool:
-        """Quick check if text is likely a grievance query."""
+    def is_grievance_query(self, text: str, *, local_only: bool = False) -> bool:
+        """Quick check if text is likely a grievance query.
+
+        local_only=True skips the Gemini semantic step and uses only the
+        deterministic keyword classifier — zero network calls. Used by the
+        /chat grievance-redirect hint, which runs on the request hot path
+        for every message and must add no API latency.
+        """
         text_lower = text.lower().strip()
 
         has_problem_signal = any(
@@ -816,7 +822,10 @@ class GrievanceWorkflow:
         if looks_informational and not has_problem_signal:
             return False
 
-        classification = self.classifier.classify(text)
+        if local_only:
+            classification = self.classifier.classify_local(text)
+        else:
+            classification = self.classifier.classify(text)
 
         # If classifier assigns a specific category (not OTHER), treat as
         # grievance — UNLESS the category is inherently informational

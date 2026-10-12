@@ -79,7 +79,7 @@ backend/
   app/
     main.py                FastAPI entrypoint (8 routers: chat, voice, conversations, evidence, grievance, documents, translate, webhooks)
     routes/
-      chat.py              /chat + /chat/stream — language detect → domain classify → RAGOrchestrator or GrievanceWorkflow
+      chat.py              /chat + /chat/stream — language detect → domain classify → RAGOrchestrator (grievance msgs: answered via RAG + additive redirect hint to the /grievance panel)
       voice.py             /voice, /voice/transcribe, /voice/speak
       conversations.py     /conversations/{session_id}
       evidence.py          /evidence/...
@@ -100,7 +100,7 @@ backend/
       voice_service.py     STT/TTS with provider fallback (Sarvam → Azure)
       lang_memory.py       language preference memory
     grievance/             9-stage state machine
-      workflow.py          GrievanceWorkflow (main orchestrator + Supabase persistence)
+      workflow.py          GrievanceWorkflow (grievance panel wizard orchestrator + Supabase persistence)
       classifier.py        complaint category classifier
       draft_builder.py     draft construction and update
       entity_extractor.py  entity extraction from user messages
@@ -130,7 +130,7 @@ frontend/
     pages/                 HomePage, ChatPage, GrievancePage, GrievanceStatusPage, GrievanceDraftViewPage, SchemesPage, SchemeDetailPage, ServicesPage, ServiceDetailPage, LibraryPage, FaqPage, LegalPage, LegalDetailPage, SignInPage, SignUpPage, NotFoundPage
     components/
       ChatWindow.tsx        Main chat UI (SSE streaming, voice, citations; ThinkingProcess unwired)
-      chat/                 MessageBubble, GrievanceFlow, panels, cards, ThinkingProcess (unwired)
+      chat/                 MessageBubble (+grievance redirect banner), panels, cards, ThinkingProcess (unwired)
       layout/               Header, nav, ConditionalNavs
       ui/                   Button, Badge, Icons, Input, Card, Skeleton, etc. (15 components)
     lib/

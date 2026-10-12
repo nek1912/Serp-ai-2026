@@ -127,14 +127,20 @@ POST /chat (or /chat/stream for SSE)   [requires Clerk JWT → 401 without it]
   ├── QueryClassifier.classify()  → web RAG classification (domain, jurisdiction, state)
   │
   ├─[if domain == "grievance"]────────────────────────────────────────────────┐
-  │   GrievanceWorkflow.process_message()                                     │
-  │   State machine: INTAKE→CLASSIFICATION→ENTITY_EXTRACTION→                │
-  │   MISSING_FIELDS→FOLLOWUP→DRAFT_READY→SUBMISSION_GUIDE→                  │
-  │   STATUS_LOOKUP→COMPLETE                                                  │
-  │   Persists to Supabase `grievance_states` table                           │
-  │   Returns WorkflowResult (English-only internal state)                    │
+  │   NOT processed in chat (in-chat grievance REMOVED 2026-10-12).           │
+  │   The message is answered via the RAG path below like any other query.    │
+  │   Additive hint: _grievance_redirect_hint() — offline keyword scan on     │
+  │   the raw query + is_grievance_query(local_only=True) on the translated   │
+  │   English query → the response gains                                     │
+  │   grievance_redirect: {detected, text} → the UI shows a redirect banner   │
+  │   and the citizen is sent to the /grievance wizard with the complaint     │
+  │   pre-filled in the textarea.                                             │
+  │   (The 9-stage state machine now runs ONLY inside the /grievance wizard:  │
+  │   INTAKE→CLASSIFICATION→ENTITY_EXTRACTION→MISSING_FIELDS→                 │
+  │   FOLLOWUP→DRAFT_READY→SUBMISSION_GUIDE→STATUS_LOOKUP→COMPLETE,           │
+  │   Supabase-persisted in `grievance_states`.)                              │
   │                                                                           │
-  │   Output translation boundary:                                            │
+  │   Output translation boundary (wizard responses):                         │
   │     draft_summary values → translated                                     │
   │     canonical dict top-level → translated                                 │
   │     submission data (portal, steps, docs, timeline) → translated          │
@@ -380,7 +386,7 @@ _grievance_message()
 - `GrievanceClassificationPanel`: tab labels use `t()` from dictionaries
 - `GrievanceFieldPanel`: tab labels use `f.field_label || f.field.replace(/_/g, " ")`
 - `GrievanceCard`: disclaimer, buttons use `t()`
-- `GrievanceFlow`: wizard submit uses `t("grievanceWizard.submitting")`
+- `GrievancePage` (wizard host — the old in-chat `GrievanceFlow` was removed 2026-10-12): wizard submit uses `t("grievanceWizard.submitting")`
 
 **Supported languages:** `en | hi | gu | mr | bn | ta | te | kn | pa | or | ml` — same as chat.
 

@@ -28,8 +28,12 @@ User message
   ├── Domain classification (app/domains.py)       AnchorStore: keyword + cosine
   ├── Translation to English (if needed)           Sarvam → Azure fallback
   │
-  ├─[grievance domain]──► GrievanceWorkflow.process_message()
-  │                        9-stage state machine, Supabase-persisted
+  ├─[grievance detected]─► Answered via RAG like any other message, plus
+  │                        an additive `grievance_redirect` hint → the UI
+  │                        offers a one-click redirect to the /grievance
+  │                        panel with the complaint pre-filled.
+  │                        (In-chat grievance processing REMOVED 2026-10-12;
+  │                         the /grievance wizard is the only grievance path)
   │
   ├─[out_of_scope]────────► Return scope message, abstained=True
   │
@@ -66,7 +70,8 @@ User message
 | Evidence gate (abstention thresholds) | `backend/app/evidence_gate.py` |
 | Citation verifier (full `web_*` IDs kept whole; truncated 8-char web prefixes stay ambiguous → invalid) | `backend/app/citation_verifier.py` |
 | Gemini reranker + Jina fallback (deadline clamped ≥10s, API minimum) | `backend/app/retrieval/gemini_reranker.py` |
-| Grievance workflow | `backend/app/grievance/workflow.py` |
+| Grievance workflow (panel wizard only) | `backend/app/grievance/workflow.py` |
+| Grievance redirect (chat → panel) | `backend/app/routes/chat.py` (`_grievance_redirect_hint`), `frontend/src/components/chat/MessageBubble.tsx` (banner), `frontend/src/pages/GrievancePage.tsx` (prefill) |
 | Voice service (STT/TTS fallback) | `backend/app/services/voice_service.py` |
 | LLM providers | `backend/app/providers/groq_llm.py`, `gemini_llm.py` |
 | Embedding providers | `backend/app/providers/embeddings.py` |
@@ -109,6 +114,17 @@ User message
    Cancelling the asyncio task does NOT stop the `to_thread` worker — never
    rely on cancellation to bound WebRAG work. Count bound (`MAX_RECOVERY_ROUNDS=2`),
    thresholds, RRF/BM25/verifier/branches stay untouched.
+10. **In-chat grievance is removed; redirect-only** (2026-10-12): `/chat` and
+    `/chat/stream` never dispatch to `GrievanceWorkflow` — the dedicated
+    `/grievance` wizard is the only grievance path. Complaints are answered
+    via RAG like any other message and may receive an additive
+    `grievance_redirect: { detected, text }` key (conditional: absent on
+    every other response, so the frozen 15-key contract stays
+    byte-identical). The hint detector is strictly offline — keyword scan on
+    the raw query + `is_grievance_query(local_only=True)` / 
+    `classifier.classify_local()` on the translated English query. Never add
+    network calls (Gemini/API) to the hint path; it runs on the hot path for
+    every message.
 
 ---
 
@@ -121,10 +137,15 @@ POST /chat   (requires Clerk JWT → 401 {"detail":"Not authenticated"} without 
   Response: { answer, language, domain, intent, entities, confidence,
               confidence_level, citations, abstained, speech_text,
               speech_segments, follow_up_question, mode, conversation_id }
+              + optional additive key, present ONLY when the message looks
+                like a grievance (all other responses keep the frozen
+                15-key contract byte-identical):
+                grievance_redirect: { detected: true, text: "<original msg>" }
 
 POST /chat/stream
   Same body as /chat
   SSE events: thinking | token | metadata | done
+  (the `grievance_redirect` key above may appear in the metadata event)
 
 POST /voice          (multipart: audio file, language, session_id, state)
 POST /voice/transcribe (JSON: { audio: base64, language })
@@ -148,7 +169,7 @@ pmfby                 Pradhan Mantri Fasal Bima Yojana (crop insurance)
 financial_inclusion   National Strategy for Financial Inclusion 2025-30
 schemes               Government schemes (no corpus ingested yet)
 agriculture           Agriculture domain (no corpus ingested yet)
-grievance             Routed to GrievanceWorkflow, never to RAG
+grievance             Never processed in chat — answered via RAG + additive redirect hint to the /grievance panel
 out_of_scope          Returns scope message, abstained=True
 ```
 

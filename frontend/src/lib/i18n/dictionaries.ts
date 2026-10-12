@@ -11,6 +11,8 @@ function interp(s: string, vars?: Vars): string {
 }
 
 const en: Record<string, string> = {
+  "chat.grievance.redirectNotice": "This looks like a grievance. File it in the Grievance Panel — your message will be carried over.",
+  "chat.grievance.openPanel": "Open Grievance Panel",
   "nav.home": "Home",
   "nav.chat": "Chat",
   "nav.schemes": "Schemes",
@@ -413,6 +415,8 @@ const en: Record<string, string> = {
 };
 
 const hi: Record<string, string> = {
+  "chat.grievance.redirectNotice": "यह एक शिकायत प्रतीत होती है। इसे शिकायत पैनल में दर्ज करें — आपका संदेश वहाँ पहुँच जाएगा।",
+  "chat.grievance.openPanel": "शिकायत पैनल खोलें",
   "nav.home": "होम",
   "nav.chat": "चैट",
   "nav.schemes": "योजनाएँ",
@@ -811,6 +815,8 @@ const hi: Record<string, string> = {
 };
 
 const mr: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ही तक्रार वाटते. ती तक्रार पॅनेलमध्ये नोंदवा — तुमचा संदेश तिथे पोहोचेल.",
+  "chat.grievance.openPanel": "तक्रार पॅनेल उघडा",
   "nav.home": "मुख्यपृष्ठ",
   "nav.chat": "चॅट",
   "nav.schemes": "योजना",
@@ -1205,6 +1211,8 @@ const mr: Record<string, string> = {
 };
 
 const bn: Record<string, string> = {
+  "chat.grievance.redirectNotice": "এটি একটি অভিযোগ বলে মনে হচ্ছে। এটি অভিযোগ প্যানেলে দায়ের করুন — আপনার বার্তাটি সেখানে পৌঁছে যাবে।",
+  "chat.grievance.openPanel": "অভিযোগ প্যানেল খুলুন",
   "nav.home": "হোম",
   "nav.chat": "চ্যাট",
   "nav.schemes": "স্কিম",
@@ -1470,6 +1478,8 @@ const bn: Record<string, string> = {
 };
 
 const ta: Record<string, string> = {
+  "chat.grievance.redirectNotice": "இது ஒரு புகார் போல் தெரிகிறது. அதை புகார் பேனலில் பதிவு செய்யுங்கள் — உங்கள் செய்தி அங்கு சென்றடையும்.",
+  "chat.grievance.openPanel": "புகார் பேனலைத் திறக்கவும்",
   "nav.home": "முகப்பு",
   "nav.chat": "அரட்டை",
   "nav.schemes": "திட்டங்கள்",
@@ -1817,6 +1827,8 @@ const ta: Record<string, string> = {
 };
 
 const te: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ఇది ఫిర్యాదులా అనిపిస్తోంది. దానిని ఫిర్యాదు ప్యానెల్‌లో నమోదు చేయండి — మీ సందేశం అక్కడ చేరుతుంది.",
+  "chat.grievance.openPanel": "ఫిర్యాదు ప్యానెల్ తెరవండి",
   "nav.home": "హోమ్",
   "nav.chat": "చాట్",
   "nav.schemes": "పథకాలు",
@@ -2103,6 +2115,8 @@ const te: Record<string, string> = {
 };
 
 const kn: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ಇದು ದೂರು ಎಂದು ಕಾಣುತ್ತದೆ. ಅದನ್ನು ದೂರು ಫಲಕದಲ್ಲಿ ದಾಖಲಿಸಿ — ನಿಮ್ಮ ಸಂದೇಶ ಅಲ್ಲಿ ತಲುಪುತ್ತದೆ.",
+  "chat.grievance.openPanel": "ದೂರು ಫಲಕ ತೆರೆಯಿರಿ",
   "nav.home": "ಮುಖಪುಟ",
   "nav.chat": "ಚಾಟ್",
   "nav.schemes": "ಯೋಜನೆಗಳು",
@@ -2388,6 +2402,8 @@ const kn: Record<string, string> = {
 };
 
 const pa: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ਇਹ ਇੱਕ ਸ਼ਿਕਾਇਤ ਲੱਗਦੀ ਹੈ। ਇਸਨੂੰ ਸ਼ਿਕਾਇਤ ਪੈਨਲ ਵਿੱਚ ਦਰਜ ਕਰੋ — ਤੁਹਾਡਾ ਸੁਨੇਹਾ ਉੱਥੇ ਪਹੁੰਚ ਜਾਵੇਗਾ।",
+  "chat.grievance.openPanel": "ਸ਼ਿਕਾਇਤ ਪੈਨਲ ਖੋਲ੍ਹੋ",
   "nav.home": "ਹੋਮ",
   "nav.chat": "ਚੈਟ",
   "nav.schemes": "ਸਕੀਮਾਂ",
@@ -2673,6 +2689,8 @@ const pa: Record<string, string> = {
 };
 
 const gu: Record<string, string> = {
+  "chat.grievance.redirectNotice": "આ ફરિયાદ લાગે છે. તેને ફરિયાદ પેનલમાં નોંધાવો — તમારો સંદેશ ત્યાં પહોંચી જશે.",
+  "chat.grievance.openPanel": "ફરિયાદ પેનલ ખોલો",
   "nav.home": "હોમ",
   "nav.chat": "ચેટ",
   "nav.schemes": "યોજનાઓ",
@@ -3026,6 +3044,8 @@ const gu: Record<string, string> = {
 };
 
 const or: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ଏହା ଏକ ଅଭିଯୋଗ ବୋଲି ମନେ ହେଉଛି। ଏହାକୁ ଅଭିଯୋଗ ପ୍ୟାନେଲରେ ଦାୟ କରନ୍ତୁ — ଆପଣଙ୍କ ବାର୍ତ୍ତା ସେଠାରେ ପହଞ୍ଚିବ।",
+  "chat.grievance.openPanel": "ଅଭିଯୋଗ ପ୍ୟାନେଲ ଖୋଲନ୍ତୁ",
   "nav.home": "ହୋମ୍",
   "nav.chat": "ଚାଟ୍",
   "nav.schemes": "ଯୋଜନା",
@@ -3311,6 +3331,8 @@ const or: Record<string, string> = {
 };
 
 const ml: Record<string, string> = {
+  "chat.grievance.redirectNotice": "ഇതൊരു പരാതി ആണെന്ന് തോന്നുന്നു. അത് പരാതി പാനലിൽ രേഖപ്പെടുത്തുക — നിങ്ങളുടെ സന്ദേശം അവിടെ എത്തും.",
+  "chat.grievance.openPanel": "പരാതി പാനൽ തുറക്കുക",
   "nav.home": "ഹോം",
   "nav.chat": "ചാറ്റ്",
   "nav.schemes": "പദ്ധതികൾ",

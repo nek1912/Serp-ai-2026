@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { useI18n } from "@/lib/i18n/provider";
 import { createSpeechService } from "@/lib/speech";
 import {
@@ -58,7 +59,7 @@ function generateId() {
 }
 
 export default function GrievancePage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   const [step, setStep] = useState<Step>("intake");
   const [complaint, setComplaint] = useState("");
@@ -81,6 +82,17 @@ export default function GrievancePage() {
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Prefill from the chat redirect: when a citizen was sent here from the
+  // chat (their message was detected as a grievance), the message is carried
+  // into the complaint textarea so they can review it and hit Next.
+  const location = useLocation();
+  useEffect(() => {
+    const prefill = (location.state as { prefill?: unknown } | null)?.prefill;
+    if (typeof prefill === "string" && prefill.trim()) {
+      setComplaint(prefill.trim());
+    }
+  }, [location.state]);
 
   const startOver = useCallback(() => {
     setStep("intake");
@@ -108,7 +120,7 @@ export default function GrievancePage() {
   const handleVoiceInput = useCallback(() => {
     if (listening) return;
     setListening(true);
-    const stop = speech.listen("en", (transcript) => {
+    const stop = speech.listen(locale, (transcript) => {
       setComplaint((prev) => (prev ? prev + " " + transcript : transcript));
       setListening(false);
     });
@@ -116,7 +128,7 @@ export default function GrievancePage() {
       stop();
       setListening(false);
     }, 15000);
-  }, [listening, speech]);
+  }, [listening, speech, locale]);
 
   const handleIntake = useCallback(async () => {
     if (!complaint.trim() || loading) return;
@@ -127,6 +139,7 @@ export default function GrievancePage() {
         message: complaint.trim(),
         conversation_id: conversationId,
         user_id: userId,
+        language: locale,
       });
       if (result.status === "ok" && result.draft) {
         setClassification({
@@ -146,12 +159,12 @@ export default function GrievancePage() {
     } finally {
       setLoading(false);
     }
-  }, [complaint, conversationId, userId, loading]);
+  }, [complaint, conversationId, userId, loading, locale]);
 
   const handleConfirm = useCallback(async () => {
     setClassificationBusy(true);
     try {
-      const fieldsResult = await getGrievanceFields(conversationId, "en");
+      const fieldsResult = await getGrievanceFields(conversationId, locale);
       if (fieldsResult.status === "ok") {
         setMandatoryFields(fieldsResult.mandatory_fields || []);
         setOptionalFields(fieldsResult.optional_fields || []);
@@ -169,7 +182,7 @@ export default function GrievancePage() {
     } finally {
       setClassificationBusy(false);
     }
-  }, [conversationId]);
+  }, [conversationId, locale]);
 
   const handleClarify = useCallback(async () => {
     if (!clarification.trim() || classificationBusy) return;
@@ -179,7 +192,7 @@ export default function GrievancePage() {
       const result = await clarifyGrievance({
         conversation_id: conversationId,
         complaint: clarification.trim(),
-        language: "en",
+        language: locale,
       });
       if (result.status === "ok" && result.draft_summary) {
         setClassification({
@@ -198,7 +211,7 @@ export default function GrievancePage() {
     } finally {
       setClassificationBusy(false);
     }
-  }, [clarification, conversationId, classificationBusy]);
+  }, [clarification, conversationId, classificationBusy, locale]);
 
   const activeList = showOptional ? optionalFields : mandatoryFields;
   const activeField = activeList[activeFieldIdx];
@@ -230,7 +243,7 @@ export default function GrievancePage() {
       }
       const result = await finalizeGrievanceDraft({
         conversation_id: conversationId,
-        language: "en",
+        language: locale,
       });
       if (result.status === "ok" && result.grievance) {
         setGrievance(result.grievance);
@@ -241,7 +254,7 @@ export default function GrievancePage() {
     } finally {
       setFieldsBusy(false);
     }
-  }, [fieldAnswers, conversationId, fieldsBusy]);
+  }, [fieldAnswers, conversationId, fieldsBusy, locale]);
 
   return (
     <div className="page-container px-4 py-10 sm:px-6 sm:py-12 md:py-16">

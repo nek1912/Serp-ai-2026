@@ -420,11 +420,7 @@ export function ChatWindow() {
         abstained: (metaSnapshot.abstained as boolean) || false,
         follow_up_question: null,
         mode: (metaSnapshot.mode as string) || undefined,
-        grievance_stage: (metaSnapshot.grievance_stage as ChatResponse["grievance_stage"]) || undefined,
-        grievance_finalized: (metaSnapshot.grievance_finalized as boolean) || undefined,
-        grievance: (metaSnapshot.grievance as ChatResponse["grievance"]) || undefined,
-        grievance_draft_summary: (metaSnapshot.grievance_draft_summary as ChatResponse["grievance_draft_summary"]) || undefined,
-        grievance_fields_schema: (metaSnapshot.grievance_fields_schema as ChatResponse["grievance_fields_schema"]) || undefined,
+        grievance_redirect: (metaSnapshot.grievance_redirect as ChatResponse["grievance_redirect"]) || null,
         conversation_id: (metaSnapshot.conversation_id as string) || undefined,
         speech_segments: (metaSnapshot.speech_segments as ChatResponse["speech_segments"]) || undefined,
       };

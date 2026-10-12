@@ -50,7 +50,7 @@ from app.session_store import (
     trim_messages,
 )
 from app.speech_text import build_grievance_speech_text, prepare_speech_text, segment_speech
-from app.ui import get_abstain_text
+from app.ui import get_abstain_text, get_assist_greeting
 from app.web_rag.query_classifier import QueryClassifier, QueryClassification, INTENT_KEYWORDS
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,34 @@ def _should_route_to_grievance(
 ) -> bool:
     """Grievance routing is disabled to ensure every question receives a direct, comprehensive answer."""
     return False
+
+
+def _grievance_redirect_hint(
+    classification: QueryClassification,
+    query_text: str,
+) -> dict | None:
+    """Detect a grievance in-chat and return an *additive* redirect hint.
+
+    The in-chat GrievanceWorkflow is intentionally disabled. When a citizen
+    types a complaint in the chat anyway, we do NOT process it as a grievance
+    here and we do NOT change the answer — we attach a hint so the frontend
+    can offer a one-click redirect to the dedicated Grievance panel
+    (/grievance), pre-filling the complaint textarea with this message.
+
+    Detection is purely local (no API calls, no translation) and reads only
+    the signals already computed for this request, so answer quality is
+    untouched. English + native Indic complaint keywords both match.
+    """
+    if not query_text or not query_text.strip():
+        return None
+    if classification.domain == "grievance" or classification.intent == "GRIEVANCE":
+        detected = True
+    else:
+        q = query_text.lower()
+        detected = any(kw in q for kw in INTENT_KEYWORDS.get("GRIEVANCE", []))
+    if not detected:
+        return None
+    return {"detected": True, "text": query_text.strip()}
 
 
 
@@ -842,24 +870,37 @@ def _translate_list(items: list[str] | None, target_lang: str, settings: Setting
     return [_localize(item, target_lang, settings=settings) for item in items]
 
 
-def _abstain(lang: str, session_id: str | None = None) -> dict:
-    answer = "I am here to assist you with government schemes, cooperative governance, and citizen services. Please feel free to ask your question."
-    return {
+def _abstain(
+    lang: str, session_id: str | None = None,
+    grievance_redirect: dict | None = None,
+) -> dict:
+    # Localised across all 11 languages via ui_strings.json. For "en" the
+    # text is byte-identical to the previous hardcoded string.
+    answer = get_assist_greeting(lang)
+    resp = {
         "answer": answer, "language": lang, "domain": "pacs_governance",
         "intent": "general", "entities": [],
         "confidence": 0.5, "confidence_level": "moderate",
         "citations": [], "abstained": False,
         "speech_text": prepare_speech_text(answer),
-        "speech_segments": [],
+        "speech_segments": segment_speech(answer, lang),
         "follow_up_question": None,
         "mode": "dual_rag", "conversation_id": session_id or "",
         "referral": None,
     }
+    # Additive key, included ONLY when the message looks like a grievance —
+    # every other response keeps the frozen 15-key contract byte-identical.
+    if grievance_redirect:
+        resp["grievance_redirect"] = grievance_redirect
+    return resp
 
 
 
-def _rag_response_to_dict(resp, lang: str, session_id: str) -> dict:
-    return {
+def _rag_response_to_dict(
+    resp, lang: str, session_id: str,
+    grievance_redirect: dict | None = None,
+) -> dict:
+    out = {
         "answer": resp.answer,
         "language": lang,
         "domain": resp.domain,
@@ -879,6 +920,14 @@ def _rag_response_to_dict(resp, lang: str, session_id: str) -> dict:
         # existing clients ignore unknown keys; no frontend change needed.
         "referral": getattr(resp, "referral", None),
     }
+    # Additive key, included ONLY when the message looks like a grievance so
+    # the UI can offer a one-click redirect to the Grievance panel
+    # (/grievance) with the complaint pre-filled. Never changes the answer
+    # itself; every non-grievance response keeps the frozen 15-key contract
+    # byte-identical.
+    if grievance_redirect:
+        out["grievance_redirect"] = grievance_redirect
+    return out
 
 
 @dataclass
@@ -1002,6 +1051,11 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
     if not question:
         return _abstain(req.language, session_id=req.session_id)
 
+    # Additive redirect hint — initialised before the try so the error path
+    # can still attach it (a complaint whose retrieval fails should still
+    # offer the Grievance panel redirect). Never changes the answer.
+    grievance_redirect = None
+
     try:
         # Resolve language early so the grievance path can translate input/output.
         # Owner-namespaced: a foreign session_id reads only the caller's own
@@ -1019,153 +1073,26 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
         # claimed for the caller by touch_session below.
         foreign = _is_chat_session_foreign(req.session_id, user_id)
 
-        # ── Active grievance workflow takes priority over fresh classification ──
-        if not foreign and _has_active_grievance(req.session_id, user_id):
-            grievance_result = _normalize_grievance_result(
-                _process_grievance_message(
-                    req.question, req.session_id,
-                    input_lang=detected_lang, settings=settings,
-                    user_id=user_id,
-                )
-            )
-            resp = {
-                "answer": grievance_result.text,
-                "language": detected_lang,
-                "domain": "grievance",
-                "intent": "GRIEVANCE",
-                "entities": [],
-                "confidence": 1.0,
-                "confidence_level": "high",
-                "citations": [],
-                "abstained": False,
-                "speech_text": "",
-                "speech_segments": [],
-                "follow_up_question": None,
-                "mode": "grievance",
-                "conversation_id": req.session_id,
-                "referral": None,
-            }
-            if grievance_result.grievance:
-                _speech_src = build_grievance_speech_text(
-                    grievance_result.grievance, detected_lang,
-                    grievance_result.stage, grievance_result.fields_schema,
-                )
-                resp["speech_text"] = _speech_src
-                resp["speech_segments"] = segment_speech(_speech_src, detected_lang)
-                resp["grievance"] = grievance_result.grievance
-            else:
-                resp["speech_text"] = prepare_speech_text(grievance_result.text)
-                resp["speech_segments"] = segment_speech(grievance_result.text, detected_lang)
-            if grievance_result.stage:
-                resp["grievance_stage"] = grievance_result.stage
-            if grievance_result.draft_summary:
-                resp["grievance_draft_summary"] = grievance_result.draft_summary
-            if grievance_result.fields_schema:
-                resp["grievance_fields_schema"] = grievance_result.fields_schema
-            if grievance_result.finalized:
-                resp["grievance_finalized"] = True
-            return resp
+        # ── In-chat grievance → redirect hint (never processed here) ──────
+        # The dedicated Grievance panel (/grievance) is the only grievance
+        # path. Here we only flag the message so the UI can offer a redirect
+        # with the complaint pre-filled. The RAG answer is unaffected.
+        grievance_redirect = _grievance_redirect_hint(
+            _cached_classification(req.question.lower()), req.question
+        )
 
-        # ── Early grievance detection (skip embedding/translation) ──
-        # Run lightweight classification on the raw question (lower‑cased) to see if it is a grievance.
-        # This avoids external embedding/translation calls which require API keys and network access.
-        raw_classification = _cached_classification(req.question.lower())
-        _input_lang_early = (detect_query_languages(req.question).get("dominant") or "en")
-        if not foreign and _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_early):
-            # Process via the full grievance workflow, preserving all response fields.
-            grievance_result = _normalize_grievance_result(
-                _process_grievance_message(
-                    req.question, req.session_id,
-                    input_lang=detected_lang, settings=settings,
-                    user_id=user_id,
-                )
-            )
-            resp = {
-                "answer": grievance_result.text,
-                "language": detected_lang,
-                "domain": "grievance",
-                "intent": "GRIEVANCE",
-                "entities": [],
-                "confidence": raw_classification.confidence,
-                "confidence_level": _confidence_level(raw_classification.confidence),
-                "citations": [],
-                "abstained": False,
-                "speech_text": "",
-                "speech_segments": [],
-                "follow_up_question": None,
-                "mode": "grievance",
-                "conversation_id": req.session_id,
-                "referral": None,
-            }
-            if grievance_result.grievance:
-                _speech_src2 = build_grievance_speech_text(
-                    grievance_result.grievance, detected_lang,
-                    grievance_result.stage, grievance_result.fields_schema,
-                )
-                resp["speech_text"] = _speech_src2
-                resp["speech_segments"] = segment_speech(_speech_src2, detected_lang)
-                resp["grievance"] = grievance_result.grievance
-            else:
-                resp["speech_text"] = prepare_speech_text(grievance_result.text)
-                resp["speech_segments"] = segment_speech(grievance_result.text, detected_lang)
-            if grievance_result.stage:
-                resp["grievance_stage"] = grievance_result.stage
-            if grievance_result.draft_summary:
-                resp["grievance_draft_summary"] = grievance_result.draft_summary
-            if grievance_result.fields_schema:
-                resp["grievance_fields_schema"] = grievance_result.fields_schema
-            if grievance_result.finalized:
-                resp["grievance_finalized"] = True
-            return resp
-        # If not a grievance, proceed with normal context resolution.
         ctx = await _resolve_context(req, user_id)
 
-        # Grievance queries → dedicated workflow (fallback after context)
-        if not foreign and _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
-            grievance_result = _normalize_grievance_result(
-                _process_grievance_message(
-                    req.question, req.session_id,
-                    input_lang=ctx.lang, settings=ctx.settings,
-                    user_id=user_id,
-                )
-            )
-            resp = {
-                "answer": grievance_result.text,
-                "language": ctx.lang,
-                "domain": "grievance",
-                "intent": "GRIEVANCE",
-                "entities": [],
-                "confidence": ctx.classification.confidence,
-                "confidence_level": _confidence_level(ctx.classification.confidence),
-                "citations": [],
-                "abstained": False,
-                "speech_text": "",
-                "speech_segments": [],
-                "follow_up_question": None,
-                "mode": "grievance",
-                "conversation_id": req.session_id,
-                "referral": None,
-            }
-            if grievance_result.grievance:
-                _speech_src3 = build_grievance_speech_text(
-                    grievance_result.grievance, ctx.lang,
-                    grievance_result.stage, grievance_result.fields_schema,
-                )
-                resp["speech_text"] = _speech_src3
-                resp["speech_segments"] = segment_speech(_speech_src3, ctx.lang)
-                resp["grievance"] = grievance_result.grievance
-            else:
-                resp["speech_text"] = prepare_speech_text(grievance_result.text)
-                resp["speech_segments"] = segment_speech(grievance_result.text, ctx.lang)
-            if grievance_result.stage:
-                resp["grievance_stage"] = grievance_result.stage
-            if grievance_result.draft_summary:
-                resp["grievance_draft_summary"] = grievance_result.draft_summary
-            if grievance_result.fields_schema:
-                resp["grievance_fields_schema"] = grievance_result.fields_schema
-            if grievance_result.finalized:
-                resp["grievance_finalized"] = True
-            return resp
+        # Refine the hint with the resolved context: the English translated
+        # query feeds the English grievance detector, so complaints phrased
+        # in any of the 11 languages are also caught. Still additive-only;
+        # the answer path below is untouched.
+        if not grievance_redirect:
+            try:
+                if _get_grievance_workflow().is_grievance_query(ctx.english_query or "", local_only=True):
+                    grievance_redirect = {"detected": True, "text": req.question.strip()}
+            except Exception:
+                pass
 
         touch_session(req.session_id, ctx.resolved_state, ctx.lang, user_id=user_id)
 
@@ -1217,11 +1144,17 @@ async def chat(req: ChatRequest, user_id: str = Depends(require_auth)) -> dict:
         save_message(req.session_id, "assistant", rag_response.answer, user_id=user_id)
         trim_messages(req.session_id, keep=50, user_id=user_id)
 
-        return _rag_response_to_dict(rag_response, ctx.lang, req.session_id)
+        return _rag_response_to_dict(
+            rag_response, ctx.lang, req.session_id,
+            grievance_redirect=grievance_redirect,
+        )
 
     except Exception:
         logger.exception("Chat route failed")
-        return _abstain(req.language, session_id=req.session_id)
+        return _abstain(
+            req.language, session_id=req.session_id,
+            grievance_redirect=grievance_redirect,
+        )
 
 
 # ── SSE streaming endpoint ──────────────────────────────────────────────────
@@ -1367,6 +1300,9 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
     """Streaming version — delegates to orchestrator, emits SSE events."""
 
     async def generate():
+        # Additive redirect hint — initialised before the try so the error
+        # path can still attach it. Never changes the streamed answer.
+        grievance_redirect = None
         try:
             # Fire first thinking event IMMEDIATELY so user sees feedback
             initial_lang = req.language or "en"
@@ -1375,158 +1311,29 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
 
             _stream_foreign = _is_chat_session_foreign(req.session_id, user_id)
 
-            # ── Active grievance workflow takes priority over fresh classification ──
-            if not _stream_foreign and _has_active_grievance(req.session_id, user_id):
-                _settings = get_settings()
-                _detected_lang = resolve_and_remember(
-                    req.session_id, req.question,
-                    req.language if req.ui_language_explicit else None,
-                    user_id=user_id,
-                )
-                grievance_result = _normalize_grievance_result(
-                    _process_grievance_message(
-                        req.question, req.session_id,
-                        input_lang=_detected_lang, settings=_settings,
-                        user_id=user_id,
-                    )
-                )
-                meta = {
-                    "domain": "grievance", "confidence": 1.0,
-                    "confidence_level": "high", "mode": "grievance",
-                    "citations": [], "abstained": False, "language": _detected_lang,
-                    "conversation_id": req.session_id,
-                }
-                if grievance_result.grievance:
-                    meta["grievance"] = grievance_result.grievance
-                    _speech_src = build_grievance_speech_text(
-                        grievance_result.grievance, _detected_lang,
-                        grievance_result.stage, grievance_result.fields_schema,
-                    )
-                    meta["speech_text"] = _speech_src
-                    meta["speech_segments"] = segment_speech(_speech_src, _detected_lang)
-                else:
-                    meta["speech_text"] = prepare_speech_text(grievance_result.text)
-                    meta["speech_segments"] = segment_speech(grievance_result.text, _detected_lang)
-                if grievance_result.stage:
-                    meta["grievance_stage"] = grievance_result.stage
-                if grievance_result.draft_summary:
-                    meta["grievance_draft_summary"] = grievance_result.draft_summary
-                if grievance_result.fields_schema:
-                    meta["grievance_fields_schema"] = grievance_result.fields_schema
-                if grievance_result.finalized:
-                    meta["grievance_finalized"] = True
-                yield _sse_event("metadata", meta)
-                for token in grievance_result.text.split(" "):
-                    yield _sse_event("token", {"text": token + " "})
-                yield _sse_event("done", {})
-                return
-
-            # ── Early grievance detection (skip embedding/translation) ──
-            # Mirrors the /chat endpoint: classify the raw question with the
-            # lightweight, purely-local keyword classifier BEFORE doing any
-            # network-dependent work (embedding provider, translation API).
-            # Without this, a genuine grievance query would only be detected
-            # *after* _resolve_context() ran — and if the embedding/translation
-            # call failed or errored for any reason (rate limit, timeout,
-            # network hiccup), the whole request fell into the generic
-            # `except Exception` handler below and returned the abstention
-            # message ("This answer needs human verification") instead of
-            # ever reaching the GrievanceWorkflow.
-            _settings2 = get_settings()
-            _detected_lang2 = resolve_and_remember(
-                req.session_id, req.question,
-                req.language if req.ui_language_explicit else None,
-                user_id=user_id,
+            # ── In-chat grievance → redirect hint (never processed here) ──
+            # The dedicated Grievance panel (/grievance) is the only grievance
+            # path. Here we only flag the message so the UI can offer a
+            # redirect with the complaint pre-filled; the RAG answer is
+            # unaffected.
+            grievance_redirect = _grievance_redirect_hint(
+                _cached_classification(req.question.lower()), req.question
             )
-            raw_classification = _cached_classification(req.question.lower())
-            _input_lang_stream_early = (detect_query_languages(req.question).get("dominant") or "en")
-            if not _stream_foreign and _should_route_to_grievance(raw_classification, req.question, input_lang=_input_lang_stream_early):
-                thinking_msgs = _THINKING_MESSAGES.get(_detected_lang2, _THINKING_MESSAGES["en"])
-                yield _sse_event("thinking", {"text": thinking_msgs[0]})
-                grievance_result = _normalize_grievance_result(
-                    _process_grievance_message(
-                        req.question, req.session_id,
-                        input_lang=_detected_lang2, settings=_settings2,
-                        user_id=user_id,
-                    )
-                )
-                meta = {
-                    "domain": "grievance", "confidence": raw_classification.confidence,
-                    "confidence_level": _confidence_level(raw_classification.confidence),
-                    "mode": "grievance",
-                    "citations": [], "abstained": False, "language": _detected_lang2,
-                    "conversation_id": req.session_id,
-                }
-                if grievance_result.grievance:
-                    meta["grievance"] = grievance_result.grievance
-                    _speech_src2 = build_grievance_speech_text(
-                        grievance_result.grievance, _detected_lang2,
-                        grievance_result.stage, grievance_result.fields_schema,
-                    )
-                    meta["speech_text"] = _speech_src2
-                    meta["speech_segments"] = segment_speech(_speech_src2, _detected_lang2)
-                else:
-                    meta["speech_text"] = prepare_speech_text(grievance_result.text)
-                    meta["speech_segments"] = segment_speech(grievance_result.text, _detected_lang2)
-                if grievance_result.stage:
-                    meta["grievance_stage"] = grievance_result.stage
-                if grievance_result.draft_summary:
-                    meta["grievance_draft_summary"] = grievance_result.draft_summary
-                if grievance_result.fields_schema:
-                    meta["grievance_fields_schema"] = grievance_result.fields_schema
-                if grievance_result.finalized:
-                    meta["grievance_finalized"] = True
-                yield _sse_event("metadata", meta)
-                for token in grievance_result.text.split(" "):
-                    yield _sse_event("token", {"text": token + " "})
-                yield _sse_event("done", {})
-                return
 
             ctx = await _resolve_context(req, user_id)
-            thinking_msgs = _THINKING_MESSAGES.get(ctx.lang, _THINKING_MESSAGES["en"])
 
-            # Grievance → dedicated workflow (fallback after context, in case
-            # contextual disambiguation in _resolve_context changes the query)
-            if not _stream_foreign and _should_route_to_grievance(ctx.classification, ctx.english_query, input_lang=ctx.lang):
-                yield _sse_event("thinking", {"text": thinking_msgs[0]})
-                grievance_result = _normalize_grievance_result(
-                    _process_grievance_message(
-                        req.question, req.session_id,
-                        input_lang=ctx.lang, settings=ctx.settings,
-                        user_id=user_id,
-                    )
-                )
-                meta = {
-                    "domain": "grievance", "confidence": ctx.classification.confidence,
-                    "confidence_level": _confidence_level(ctx.classification.confidence),
-                    "mode": "grievance",
-                    "citations": [], "abstained": False, "language": ctx.lang,
-                    "conversation_id": req.session_id,
-                }
-                if grievance_result.grievance:
-                    meta["grievance"] = grievance_result.grievance
-                    _speech_src3 = build_grievance_speech_text(
-                        grievance_result.grievance, ctx.lang,
-                        grievance_result.stage, grievance_result.fields_schema,
-                    )
-                    meta["speech_text"] = _speech_src3
-                    meta["speech_segments"] = segment_speech(_speech_src3, ctx.lang)
-                else:
-                    meta["speech_text"] = prepare_speech_text(grievance_result.text)
-                    meta["speech_segments"] = segment_speech(grievance_result.text, ctx.lang)
-                if grievance_result.stage:
-                    meta["grievance_stage"] = grievance_result.stage
-                if grievance_result.draft_summary:
-                    meta["grievance_draft_summary"] = grievance_result.draft_summary
-                if grievance_result.fields_schema:
-                    meta["grievance_fields_schema"] = grievance_result.fields_schema
-                if grievance_result.finalized:
-                    meta["grievance_finalized"] = True
-                yield _sse_event("metadata", meta)
-                for token in grievance_result.text.split(" "):
-                    yield _sse_event("token", {"text": token + " "})
-                yield _sse_event("done", {})
-                return
+            # Refine the hint with the resolved context: the English translated
+            # query feeds the English grievance detector, so complaints phrased
+            # in any of the 11 languages are also caught. Additive-only; the
+            # answer path below is untouched.
+            if not grievance_redirect:
+                try:
+                    if _get_grievance_workflow().is_grievance_query(ctx.english_query or "", local_only=True):
+                        grievance_redirect = {"detected": True, "text": req.question.strip()}
+                except Exception:
+                    pass
+
+            thinking_msgs = _THINKING_MESSAGES.get(ctx.lang, _THINKING_MESSAGES["en"])
 
             touch_session(req.session_id, ctx.resolved_state, ctx.lang, user_id=user_id)
 
@@ -1573,7 +1380,7 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
             save_message(req.session_id, "assistant", rag_response.answer, user_id=user_id)
             trim_messages(req.session_id, keep=50, user_id=user_id)
 
-            yield _sse_event("metadata", {
+            _meta = {
                 "domain": rag_response.domain,
                 "confidence": rag_response.confidence,
                 "confidence_level": _confidence_level(rag_response.confidence),
@@ -1581,17 +1388,26 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(require_auth)):
                 "abstained": rag_response.abstained,
                 "language": ctx.lang,
                 "mode": rag_response.mode,
-            })
+            }
+            # Additive key, included ONLY when the message looks like a
+            # grievance so the UI can offer a redirect to the Grievance panel
+            # with the complaint pre-filled. Never changes the answer itself.
+            if grievance_redirect:
+                _meta["grievance_redirect"] = grievance_redirect
+            yield _sse_event("metadata", _meta)
             yield _sse_event("done", {})
 
         except Exception:
             logger.exception("Streaming chat route failed")
             answer = get_abstain_text(req.language)
-            yield _sse_event("metadata", {
+            _err_meta = {
                 "domain": "unknown", "confidence": 0.0,
                 "confidence_level": "none", "citations": [],
                 "abstained": True, "language": req.language,
-            })
+            }
+            if grievance_redirect:
+                _err_meta["grievance_redirect"] = grievance_redirect
+            yield _sse_event("metadata", _err_meta)
             for token in answer.split(" "):
                 yield _sse_event("token", {"text": token + " "})
             yield _sse_event("done", {})

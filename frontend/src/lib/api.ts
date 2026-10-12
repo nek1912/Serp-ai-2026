@@ -117,6 +117,12 @@ export interface ChatResponse {
     optional_fields: GrievanceFieldSpec[];
   } | null;
   grievance_finalized?: boolean;
+  /** Additive key — present ONLY when the chat message looks like a grievance
+   *  (absent otherwise, keeping the frozen response contract byte-identical).
+   *  The UI offers a one-click redirect to the Grievance panel (/grievance)
+   *  with `text` pre-filled in the complaint textarea. Never affects the
+   *  answer itself. */
+  grievance_redirect?: { detected: boolean; text: string } | null;
   conversation_id?: string;
   speech_text?: string;
   speech_segments?: SpeechSegment[];
@@ -155,6 +161,9 @@ export async function detectGrievance(payload: {
   message: string;
   conversation_id: string;
   user_id: string;
+  /** Citizen's UI language; the backend translates the complaint to
+   *  English before classification when this is not "en". */
+  language?: string;
 }): Promise<GrievanceDetectResponse> {
   const r = await apiFetch("/api/grievance/detect", {
     method: "POST",

@@ -14,6 +14,8 @@ already-confirmed field values directly onto the draft.
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
+import dataclasses
+
 from app.auth import require_auth
 from app.config import get_settings
 from app.conversation_store import ensure_conversation, get_conversation
@@ -72,12 +74,33 @@ def _translate_list(items: list[str] | None, target_lang: str) -> list[str] | No
     return [_translate(item, target_lang) for item in items]
 
 
+def _to_english(text: str, source_lang: str) -> str:
+    """Translate citizen-composed complaint text to English (Sarvam → Azure).
+
+    Used so the English-only grievance classifier/entity-extractor sees
+    English input regardless of the citizen's language. Best-effort: on
+    provider failure the original text is returned unchanged (the
+    classifier then behaves exactly as it did before this helper existed).
+    No-op for source_lang == "en" — zero behavior change for English.
+    """
+    if not text or source_lang == "en":
+        return text
+    try:
+        from app.routes.chat import _translate_to_english
+        return _translate_to_english(text, source_lang, get_settings())
+    except Exception:
+        return text
+
+
 class GrievanceRequest(BaseModel):
     message: str
     conversation_id: str
     # Legacy clients send a locally generated id here; it is ignored —
     # grievance-state ownership always binds to the authenticated sub.
     user_id: str | None = None
+    # Citizen's UI language (en/hi/gu/mr/bn/ta/te/kn/pa/or/ml). Optional and
+    # defaulting to "en" keeps every existing client byte-compatible.
+    language: str = "en"
 
 
 def _existing_conversation(conversation_id: str) -> dict | None:
@@ -111,16 +134,39 @@ def handle_grievance(req: GrievanceRequest, authed_user_id: str = Depends(requir
     if existing is not None and existing.get("user_id") != authed_user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     ensure_conversation(req.conversation_id, authed_user_id)
+    # The grievance classifier / entity-extractor is English-keyword based,
+    # so an Indic complaint must be translated to English before the
+    # workflow sees it. For language == "en" this is a no-op (zero change).
+    complaint_en = _to_english(req.message, req.language)
     result = _workflow.process_message(
-        user_message=req.message,
+        user_message=complaint_en,
         conversation_id=req.conversation_id,
         user_id=authed_user_id,
     )
+    response_text = result.response
+    draft = result.draft
+    # Localise the citizen-facing classification display values, mirroring
+    # the /clarify endpoint's draft_summary approach (display-case strings,
+    # which the static translation maps are keyed on). The English canonical
+    # values remain the workflow's internal truth — state.draft is never
+    # mutated, only the response copy. On translation failure _translate
+    # returns the English string (same as today's behavior).
+    if req.language != "en" and draft is not None:
+        draft = dataclasses.replace(
+            draft,
+            category=_translate(draft.category.value.replace("_", " ").title(), req.language),
+            sub_category=_translate(draft.sub_category.value.replace("_", " ").title(), req.language),
+            jurisdiction=_translate(draft.jurisdiction.title(), req.language),
+            title=_translate(draft.title, req.language),
+            description=_translate(draft.description, req.language),
+            department=_translate(draft.department, req.language),
+        )
+        response_text = _translate(response_text, req.language)
     return {
         "status": "ok",
-        "response": result.response,
+        "response": response_text,
         "stage": result.stage.value if hasattr(result.stage, "value") else str(result.stage),
-        "draft": result.draft,
+        "draft": draft,
         "is_complete": result.is_complete,
         "submission_route": result.submission_route,
         "evidence": result.evidence,
@@ -424,9 +470,14 @@ def clarify_grievance(req: GrievanceClarifyRequest, user_id: str = Depends(requi
     classifier = GrievanceClassifier()
     draft_builder = GrievanceDraftBuilder()
 
+    # The classifier/draft-builder are English-keyword based, so a
+    # non-English clarification must be translated to English first.
+    # No-op for language == "en" (zero change for existing clients).
+    complaint_en = _to_english(req.complaint, req.language)
+
     # Build a completely fresh draft from the new complaint text
     new_draft = draft_builder.build_initial_draft(
-        req.complaint, state.conversation_id, state.user_id
+        complaint_en, state.conversation_id, state.user_id
     )
     state.draft = new_draft
     state.stage = GrievanceStage.CLASSIFICATION
@@ -434,7 +485,7 @@ def clarify_grievance(req: GrievanceClarifyRequest, user_id: str = Depends(requi
     save_grievance_state(state)
 
     # Classify the new complaint
-    classifier.classify(req.complaint)
+    classifier.classify(complaint_en)
 
     # Build field schema for the new classification
     field_detector = GrievanceFieldDetector()

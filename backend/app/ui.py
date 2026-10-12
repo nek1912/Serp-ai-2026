@@ -22,3 +22,14 @@ def get_abstain_text(language: str) -> str:
     strings = _load_ui_strings()
     abstain = strings.get("abstain_text", {})
     return abstain.get(language, abstain.get("en", "No answer found."))
+
+
+def get_assist_greeting(language: str) -> str:
+    """Get the friendly assistance fallback message for the given language.
+
+    Localised across all 11 supported languages; falls back to English
+    for unknown/missing language codes.
+    """
+    strings = _load_ui_strings()
+    greetings = strings.get("assist_greeting", {})
+    return greetings.get(language, greetings.get("en", "How can I help you?"))

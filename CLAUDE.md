@@ -109,7 +109,7 @@ SSE events: `thinking | token | metadata | done`
 - ✅ `/chat` and `/chat/stream` — full dual-pipeline RAG (static + web in parallel)
 - ✅ `/voice` — Sarvam STT → chat handler → Sarvam TTS
 - ✅ `/voice/transcribe` and `/voice/speak` — standalone STT/TTS endpoints
-- ✅ GrievanceWorkflow — 9-stage state machine, Supabase-persisted
+- ✅ GrievanceWorkflow — 9-stage state machine, Supabase-persisted (grievance panel wizard only; in-chat grievance was removed 2026-10-12 — chat complaints are answered via RAG and receive an additive `grievance_redirect` hint that opens the /grievance panel with the message pre-filled)
 - ✅ Domain classification — AnchorStore (keyword + cosine, floor 0.20)
 - ✅ StaticRAGService — Supabase pgvector hybrid retrieval (dense + lexical RRF)
 - ✅ WebRAGService — 10-step pipeline (Tavily/SerpApi-Google/Firecrawl → BM25 → Gemini rerank → verify) + ≤2 single-axis recovery rounds with cooperative deadline (no new round past `started + web_rag_timeout_s`)

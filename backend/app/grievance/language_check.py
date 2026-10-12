@@ -16,7 +16,12 @@ _SCRIPT_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
     "devanagari": ((0x0900, 0x097F),),  # Hindi, Marathi
     "bengali": ((0x0980, 0x09FF),),
     "gujarati": ((0x0A80, 0x0AFF),),
+    "gurmukhi": ((0x0A00, 0x0A7F),),  # Punjabi
+    "oriya": ((0x0B00, 0x0B7F),),  # Odia
     "tamil": ((0x0B80, 0x0BFF),),
+    "telugu": ((0x0C00, 0x0C7F),),
+    "kannada": ((0x0C80, 0x0CFF),),
+    "malayalam": ((0x0D00, 0x0D7F),),
 }
 
 # Minimum number of letters from a script before it counts as

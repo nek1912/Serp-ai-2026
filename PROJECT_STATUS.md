@@ -72,8 +72,8 @@ implemented and wired together.
 | Component | File(s) | Status | Notes |
 |---|---|---|---|
 | FastAPI app + `/health`, `/health/providers` | `app/main.py` | working | 8 routers registered (chat, voice, conversations, evidence, grievance, documents, translate, webhooks) |
-| `/chat` (sync) | `app/routes/chat.py` | working | Language detect → domain classify → RAGOrchestrator or GrievanceWorkflow; clean language boundary for grievance (input translate → English workflow → output translate); multilingual routing with Tier 2 grievance-keyword override + Tier 3 non-English guard; 11-language support (en, hi, gu, mr, bn, ta, te, kn, pa, or, ml); mode-aware routing (static/web/rag_web) |
-| `/chat/stream` (SSE) | `app/routes/chat.py` | working | Same pipeline, Server-Sent Events with `thinking/token/metadata/done` events (no `step` event emitted despite `_make_step_emitter()` existing in code); same multilingual routing fixes |
+| `/chat` (sync) | `app/routes/chat.py` | working | Language detect → domain classify → RAGOrchestrator (in-chat grievance removed 2026-10-12 — grievance messages answered via RAG + additive `grievance_redirect` hint opening the /grievance panel with the complaint pre-filled); multilingual routing with Tier 2 grievance-keyword override + Tier 3 non-English guard; 11-language support (en, hi, gu, mr, bn, ta, te, kn, pa, or, ml); mode-aware routing (static/web/rag_web) |
+| `/chat/stream` (SSE) | `app/routes/chat.py` | working | Same pipeline, Server-Sent Events with `thinking/token/metadata/done` events (no `step` event emitted despite `_make_step_emitter()` existing in code); same multilingual routing fixes; conditional `grievance_redirect` key in the `metadata` event |
 | `/voice`, `/voice/transcribe`, `/voice/speak` | `app/routes/voice.py` | working | Full audio→STT→RAG→TTS pipeline |
 | `/conversations` | `app/routes/conversations.py` | working | Session history retrieval |
 | `/evidence` | `app/routes/evidence.py` | working | Evidence endpoint |
@@ -95,7 +95,7 @@ implemented and wired together.
 | Evidence gate | `app/evidence_gate.py` | working | Threshold: `TOP1_THRESHOLD=0.25`, `SECONDARY_THRESHOLD=0.30`, `MIN_CHUNKS_ABOVE_SECONDARY=2` |
 | Citation verifier | `app/citation_verifier.py` | working | Set-membership check — every `[chunk:id]` must map to a retrieved chunk; full `web_*` IDs kept whole (truncated 8-char web prefixes stay ambiguous → invalid); evidence URLs allowlisted (naming the official portal is not fabrication); format variants normalized pre-verification |
 | Confidence calculation | `app/services/rag_orchestrator.py` | working | Band-based; dual-source gets +0.10 boost |
-| GrievanceWorkflow (9-stage state machine) | `app/grievance/workflow.py` | working | INTAKE → CLASSIFICATION → ENTITY_EXTRACTION → MISSING_FIELDS → FOLLOWUP → DRAFT_READY → SUBMISSION_GUIDE → STATUS_LOOKUP → COMPLETE; English-only source of truth; fresh-state defense for new complaints after completed grievance |
+| GrievanceWorkflow (9-stage state machine) | `app/grievance/workflow.py` | working | Grievance panel wizard only (no longer invoked from `/chat`); INTAKE → CLASSIFICATION → ENTITY_EXTRACTION → MISSING_FIELDS → FOLLOWUP → DRAFT_READY → SUBMISSION_GUIDE → STATUS_LOOKUP → COMPLETE; English-only source of truth; fresh-state defense for new complaints after completed grievance; `is_grievance_query(local_only=True)` reused offline by the chat redirect hint |
 | Grievance classifier | `app/grievance/classifier.py` | working | |
 | Grievance draft builder | `app/grievance/draft_builder.py` | working | English-only; canonical dict exposes `description.original` for user's pre-translation text |
 | Grievance entity extractor | `app/grievance/entity_extractor.py` | working | |
@@ -106,7 +106,7 @@ implemented and wired together.
 | Grievance state persistence | `app/grievance/workflow.py` | working | Supabase `grievance_states` table, upsert on `conversation_id` |
 | Grievance localization layer | `app/routes/chat.py`, `app/routes/grievance.py`, `app/grievance/translations.py` | working | Backend translates: field prompts (FIELD_PROMPTS map), submission steps, followup prefixes, workflow prefixes, field labels, draft_summary, canonical dict; user values preserved verbatim; frontend translates field card labels via i18n dictionary |
 | Routing hierarchy | `app/routes/chat.py`, `app/grievance/workflow.py` | working | Tier 1: domain/intent → grievance; Tier 2: guidance intent → RAG, grievance-keyword override; Tier 3: non-English guard; informational regex |
-| Grievance UI (frontend) | `frontend/src/components/chat/GrievanceFlow.tsx` | working | Orchestrates stage panels; `GrievanceClassificationPanel`, `GrievanceFieldPanel`, `GrievanceCard` (renders i18n-translated field labels) |
+| Grievance UI (frontend) | `frontend/src/pages/GrievancePage.tsx` | working | Standalone /grievance wizard hosting stage panels (`GrievanceClassificationPanel`, `GrievanceFieldPanel`, `GrievanceCard` renders i18n-translated field labels); the in-chat `GrievanceFlow.tsx` was removed 2026-10-12 — the chat→panel redirect banner lives in `MessageBubble.tsx` and pre-fills the complaint textarea via router state |
 | Session isolation | `frontend/src/components/ChatWindow.tsx` | working | `useRef` + `resetSessionId()` prevents state leakage across "New Chat" |
 | VoiceService (STT/TTS fallback chain) | `app/services/voice_service.py` | working | STT: Sarvam→Azure; TTS: Sarvam only (Azure bad for Indic langs) |
 | Sarvam STT/TTS providers | `app/providers/sarvam_voice.py` | working | Primary voice provider |

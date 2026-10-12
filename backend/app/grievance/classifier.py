@@ -248,6 +248,23 @@ class GrievanceClassifier:
         # 4. Gemini unavailable or failed — use keyword result
         return kw_result
 
+    def classify_local(self, text: str) -> GrievanceClassification:
+        """Deterministic keyword-only classification — zero network calls.
+
+        Same keyword logic as classify()'s step 1, without the Gemini
+        semantic step. Used by callers that must stay off the network
+        (e.g. the /chat grievance-redirect hint on the request hot path).
+        """
+        text_lower = text.lower().strip()
+        if not text_lower:
+            return GrievanceClassification(
+                category=GrievanceCategory.OTHER,
+                sub_category=GrievanceSubCategory.OTHER,
+                confidence=0.0,
+                matched_keywords=[],
+            )
+        return self._classify_by_keywords(text_lower)
+
     # ── Keyword classifier (deterministic) ─────────────────────────────────────
 
     def _classify_by_keywords(self, text_lower: str) -> GrievanceClassification:
